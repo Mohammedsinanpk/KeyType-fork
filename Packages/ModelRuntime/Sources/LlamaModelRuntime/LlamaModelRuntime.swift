@@ -25,6 +25,14 @@ public actor LlamaModelRuntime: LocalModelRuntime {
     private nonisolated(unsafe) let ctx: OpaquePointer
     private nonisolated(unsafe) let vocab: OpaquePointer
     private nonisolated(unsafe) let memory: OpaquePointer
+
+    /// `const llama_model *` exposed for vocab introspection (read-only queries via the
+    /// thread-safe llama metadata API). Internal to the package; consumers go through
+    /// `makeIntrospector()`.
+    nonisolated internal var modelPointer: OpaquePointer { model }
+    /// `const llama_vocab *` exposed for vocab introspection. Same threading caveats as
+    /// `LlamaTokenizer` — read-only access on the documented-thread-safe APIs.
+    nonisolated internal var vocabPointer: OpaquePointer { vocab }
     private nonisolated let reuseThreshold: Int
     private nonisolated let nBatch: Int
 
@@ -33,7 +41,7 @@ public actor LlamaModelRuntime: LocalModelRuntime {
     /// `llama_decode`. Exposed for tests that want to assert KV reuse really happened.
     public private(set) var lastPrepareDecodedCount: Int = 0
 
-    public init(modelURL: URL, contextLength: Int = 2048, reuseThreshold: Int = 8) throws {
+    public init(modelURL: URL, contextLength: Int = 4096, reuseThreshold: Int = 8) throws {
         guard ModelContainer.modelExists(at: modelURL) else {
             throw LlamaRuntimeError.modelFileMissing(path: modelURL.path)
         }

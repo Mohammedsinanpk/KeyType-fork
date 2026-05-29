@@ -112,3 +112,53 @@ public final class StubModelRuntime: LocalModelRuntime {
         step = 0
     }
 }
+
+/// Path-aware test runtime: returns next-token logits as a function of the **full token
+/// sequence** seen so far (prompt + emitted tokens), not a linear step counter. This is what
+/// the M5 multi-branch decoder needs — it re-`prepare`s `basePrompt + branchTokens` to score
+/// each branch, so a step-based stub (`StubModelRuntime`) cannot represent path-dependent
+/// logits. An optional `perCallDelayNanoseconds` makes generation observably in-flight so
+/// cancellation tests can interrupt it (`Task.sleep` is cancellation-aware).
+public final class TreeScriptedModelRuntime: LocalModelRuntime {
+    public let metadata: ModelMetadata
+    public let tokenizer: ModelTokenizing
+    private let logitsByPath: [[TokenID]: [TokenLogit]]
+    private let perCallDelayNanoseconds: UInt64?
+    private var currentTokens: [TokenID] = []
+
+    public init(
+        logitsByPath: [[TokenID]: [TokenLogit]],
+        metadata: ModelMetadata = ModelMetadata(
+            identifier: "tree-scripted",
+            family: "stub",
+            vocabularySize: 256,
+            contextLength: 4096
+        ),
+        tokenizer: ModelTokenizing = UTF8FallbackTokenizer(),
+        perCallDelayNanoseconds: UInt64? = nil
+    ) {
+        self.logitsByPath = logitsByPath
+        self.metadata = metadata
+        self.tokenizer = tokenizer
+        self.perCallDelayNanoseconds = perCallDelayNanoseconds
+    }
+
+    public func prepare(promptTokens: [TokenID]) async throws {
+        if let delay = perCallDelayNanoseconds { try await Task.sleep(nanoseconds: delay) }
+        currentTokens = promptTokens
+    }
+
+    public func logitsForNextToken() async throws -> [TokenLogit] {
+        if let delay = perCallDelayNanoseconds { try await Task.sleep(nanoseconds: delay) }
+        return logitsByPath[currentTokens] ?? []
+    }
+
+    public func decodeNext(tokenID: TokenID) async throws {
+        if let delay = perCallDelayNanoseconds { try await Task.sleep(nanoseconds: delay) }
+        currentTokens.append(tokenID)
+    }
+
+    public func resetKVCache() async {
+        currentTokens = []
+    }
+}

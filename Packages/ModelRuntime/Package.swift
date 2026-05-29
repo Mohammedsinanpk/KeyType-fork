@@ -10,7 +10,8 @@ let package = Package(
         .library(name: "LlamaModelRuntime", targets: ["LlamaModelRuntime"])
     ],
     dependencies: [
-        .package(path: "../AutocompleteCore")
+        .package(path: "../AutocompleteCore"),
+        .package(path: "../TokenProfiles")
     ],
     targets: [
         .target(
@@ -29,6 +30,7 @@ let package = Package(
             name: "LlamaModelRuntime",
             dependencies: [
                 .product(name: "AutocompleteCore", package: "AutocompleteCore"),
+                .product(name: "TokenProfiles", package: "TokenProfiles"),
                 "ModelRuntime",
                 "llama"
             ]

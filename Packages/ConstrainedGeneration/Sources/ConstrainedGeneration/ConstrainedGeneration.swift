@@ -4,42 +4,15 @@ import Foundation
 import ModelRuntime
 import TokenProfiles
 
-public struct DecodingConfiguration: Equatable {
-    public var topK: Int
-    public var topP: Float
-    public var temperature: Float
-    public var branchWidth: Int
-    public var relativeCutoff: Float
-
-    public init(
-        topK: Int = 64,
-        topP: Float = 0.95,
-        temperature: Float = 0.8,
-        branchWidth: Int = 8,
-        relativeCutoff: Float = 8
-    ) {
-        self.topK = topK
-        self.topP = topP
-        self.temperature = temperature
-        self.branchWidth = branchWidth
-        self.relativeCutoff = relativeCutoff
-    }
-}
-
-public struct CandidateBranch: Equatable {
-    public var tokenIDs: [TokenID]
-    public var text: String
-    public var score: Float
-    public var displayWidth: Int
-
-    public init(tokenIDs: [TokenID] = [], text: String = "", score: Float = 0, displayWidth: Int = 0) {
-        self.tokenIDs = tokenIDs
-        self.text = text
-        self.score = score
-        self.displayWidth = displayWidth
-    }
-}
-
+/// Real constrained, multi-branch decoder (M5, see ADR-010).
+///
+/// The engine drives the **existing** linear `LocalModelRuntime` protocol — to score a branch
+/// it re-`prepare`s `basePrompt + branchTokens` and reads the next-token logits, relying on KV
+/// prefix reuse to keep that cheap. Search is a deterministic best-first beam ordered by
+/// cumulative log-probability; `temperature` / `topK` / `topP` shape the per-step candidate
+/// pool (no RNG). Admissibility (required prefix + byte/trie constraints) and token policy
+/// (exclusions, bias, stop behaviour, display width) come from the `AutocompleteProfile`, so the
+/// engine works identically against the in-memory and the memory-mapped ACPF profile.
 public final class ConstrainedGenerationEngine: CompletionGenerating {
     private let runtime: LocalModelRuntime
     private let profile: AutocompleteProfile
@@ -60,71 +33,140 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
 
     public func completions(for request: CompletionRequest) async throws -> [CompletionCandidate] {
         let policy = compatibilityStore.policy(for: request.context.target)
-        guard policy.isCompletionEnabled else {
-            return []
-        }
-        guard policy.allowsMidLineCompletion || request.context.afterCursor.isEmpty else {
-            return []
-        }
+        guard policy.isCompletionEnabled else { return [] }
+        guard policy.allowsMidLineCompletion || request.context.afterCursor.isEmpty else { return [] }
 
-        let promptTokens = try runtime.tokenizer.tokenize(request.prompt)
-        try await runtime.prepare(promptTokens: promptTokens)
+        let basePrompt = try runtime.tokenizer.tokenize(request.prompt)
 
-        var branches = [CandidateBranch()]
+        var live = [GenerationBranch(requiredPrefix: request.requiredPrefixBytes)]
+        var finalized: [GenerationBranch] = []
+        let maxDepth = max(0, request.maxCompletionTokens)
 
-        for _ in 0..<request.maxCompletionTokens {
-            let logits = try await runtime.logitsForNextToken()
-            guard !logits.isEmpty else {
-                break
-            }
+        depthLoop: for _ in 0..<maxDepth {
+            try Task.checkCancellation()
+            if live.isEmpty { break }
 
-            let ranked = logits
-                .filter { !profile.isExcluded($0.tokenID, mode: request.mode) }
-                .filter { profile.tokenAllowed($0.tokenID, afterRequiredPrefix: request.requiredPrefixBytes) }
-                .map { logit in
-                    TokenLogit(
-                        tokenID: logit.tokenID,
-                        logit: logit.logit + profile.bias(for: logit.tokenID, mode: request.mode)
-                    )
+            var nextLive: [GenerationBranch] = []
+            for branch in live {
+                try Task.checkCancellation()
+
+                try await runtime.prepare(promptTokens: basePrompt + branch.tokenIDs)
+                let logits = try await runtime.logitsForNextToken()
+                guard !logits.isEmpty else {
+                    finalizeIfValid(branch, into: &finalized)
+                    continue
                 }
-                .sorted { $0.logit > $1.logit }
-                .prefix(max(1, min(configuration.branchWidth, configuration.topK)))
 
-            guard let next = ranked.first else {
-                break
-            }
+                // The model's single most likely continuation being a terminator is the
+                // signal to stop this branch and keep what we have so far.
+                if let top = logits.max(by: { $0.logit < $1.logit })?.tokenID, isHardStop(top) {
+                    finalizeIfValid(branch, into: &finalized)
+                    continue
+                }
 
-            try await runtime.decodeNext(tokenID: next.tokenID)
-            let bytesText = try runtime.tokenizer.detokenize([next.tokenID])
-            let width = profile.displayWidth(for: next.tokenID)
-
-            branches = branches.map {
-                CandidateBranch(
-                    tokenIDs: $0.tokenIDs + [next.tokenID],
-                    text: $0.text + bytesText,
-                    score: $0.score + next.logit,
-                    displayWidth: $0.displayWidth + max(width, bytesText.count)
+                let ranked = TokenSampler.rank(
+                    logits: logits,
+                    mode: request.mode,
+                    profile: profile,
+                    configuration: configuration,
+                    isAdmissible: { profile.tokenAllowed($0, afterRequiredPrefix: branch.remainingPrefix) }
                 )
+                if ranked.isEmpty {
+                    finalizeIfValid(branch, into: &finalized)
+                    continue
+                }
+
+                for token in ranked {
+                    let id = token.tokenID
+                    if isHardStop(id) { continue } // never displayed; argmax handles "stop here"
+
+                    let tokenBytes = profileBytes(for: id)
+                    let outcome = branch.extending(
+                        withToken: id,
+                        bytes: tokenBytes,
+                        profileWidth: profile.displayWidth(for: id),
+                        logProbability: token.logProbability,
+                        maxDisplayWidth: request.maxDisplayWidth
+                    )
+
+                    switch outcome {
+                    case .inadmissiblePrefix, .invalidUTF8, .overWidth:
+                        continue // drop this extension
+                    case let .extended(child):
+                        switch profile.stopBehavior(for: id) {
+                        case .stopAndDisplay:
+                            finalizeIfValid(child, into: &finalized)
+                        case .stopAndSuppress:
+                            continue
+                        case .continueGeneration:
+                            nextLive.append(child)
+                        }
+                    }
+                }
             }
 
-            if branches.contains(where: { $0.displayWidth > request.maxDisplayWidth }) {
-                break
-            }
-            if profile.stopBehavior(for: next.tokenID) != .continueGeneration {
-                break
-            }
+            live = prune(nextLive)
         }
 
-        return branches
-            .filter { !$0.text.isEmpty && $0.displayWidth <= request.maxDisplayWidth }
-            .map {
-                CompletionCandidate(
-                    text: $0.text,
-                    tokenIDs: $0.tokenIDs,
-                    logProbability: Double($0.score),
-                    displayWidth: $0.displayWidth,
-                    mode: request.mode
-                )
-            }
+        // Branches still alive at the depth cap are valid candidates too.
+        for branch in live {
+            finalizeIfValid(branch, into: &finalized)
+        }
+
+        return makeCandidates(from: finalized, mode: request.mode)
+    }
+
+    // MARK: - Helpers
+
+    private func isHardStop(_ id: TokenID) -> Bool {
+        if let eos = runtime.metadata.eosTokenID, id == eos { return true }
+        if let eot = runtime.metadata.eotTokenID, id == eot { return true }
+        return profile.stopBehavior(for: id) == .stopAndSuppress
+    }
+
+    private func profileBytes(for id: TokenID) -> [UInt8] {
+        if let bytes = profile.record(for: id)?.bytes { return bytes }
+        return (try? runtime.tokenizer.rawBytes(for: id)) ?? []
+    }
+
+    private func finalizeIfValid(_ branch: GenerationBranch, into finalized: inout [GenerationBranch]) {
+        if branch.isCompleteAndValid {
+            finalized.append(branch)
+        }
+    }
+
+    /// Keep the highest-scoring branches within the relative-cutoff margin and beam width.
+    private func prune(_ branches: [GenerationBranch]) -> [GenerationBranch] {
+        guard !branches.isEmpty else { return [] }
+        var sorted = branches.sorted { $0.score > $1.score }
+        let best = sorted[0].score
+        sorted = sorted.filter { best - $0.score <= configuration.relativeCutoff }
+        if configuration.branchWidth > 0 && sorted.count > configuration.branchWidth {
+            sorted.removeLast(sorted.count - configuration.branchWidth)
+        }
+        return sorted
+    }
+
+    /// Dedupe by emitted text (best score wins), rank, and cap to `maxCandidates`.
+    private func makeCandidates(from branches: [GenerationBranch], mode: CompletionMode) -> [CompletionCandidate] {
+        var bestByText: [String: GenerationBranch] = [:]
+        for branch in branches {
+            if let existing = bestByText[branch.text], existing.score >= branch.score { continue }
+            bestByText[branch.text] = branch
+        }
+
+        let ordered = bestByText.values.sorted { lhs, rhs in
+            lhs.score != rhs.score ? lhs.score > rhs.score : lhs.text < rhs.text
+        }
+
+        return ordered.prefix(max(0, configuration.maxCandidates)).map { branch in
+            CompletionCandidate(
+                text: branch.text,
+                tokenIDs: branch.tokenIDs,
+                logProbability: Double(branch.score),
+                displayWidth: branch.displayWidth,
+                mode: mode
+            )
+        }
     }
 }

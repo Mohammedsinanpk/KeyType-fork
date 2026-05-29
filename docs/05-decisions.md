@@ -186,3 +186,277 @@ instant, and must not burn battery while no one is typing.
     already isolated to one target — we can interpose a thin C-only shim target without touching
     `AutocompleteCore` / `ConstrainedGeneration`.
 
+## ADR-008 — Tokenizer-backed prompt budgeting and latency-derived `maxPromptTokens`
+
+- Date: 2026-05-29
+- Status: accepted
+- Context: M3's acceptance bar is that the rendered prompt "stays within `maxPromptTokens`
+  measured by the real counter" and that oversized `before-/after-cursor` truncate toward the
+  caret. Before this milestone `Prompting` used `ApproximatePromptTokenCounter`
+  (`ceil(chars/4)`), `truncate(...)` worked in characters (`budget * 4`), `allocate(...)` charged
+  only the content (not headings or `\n\n` separators) against the running budget, and
+  `PromptBuilder.maxPromptTokens` defaulted to a hand-picked `4096`. None of those are real
+  guarantees with a tokenizer like Qwen3.5's: BPE merges, whitespace, and per-token byte ranges
+  mean character-count approximations drift, and the unaccounted heading/separator overhead can
+  push the final prompt past `maxPromptTokens` even when each section looks within budget. The
+  ceiling itself also needs an empirical basis: it is fundamentally a latency budget (cold
+  `llama_decode` of the whole prompt with an empty KV cache), not a free parameter.
+- Decision:
+  - **Tokenizer-backed counter.** Introduced `TokenizerPromptTokenCounter` in `Prompting` that
+    wraps any `ModelTokenizing` (in production: `LlamaTokenizer`) and falls back to the
+    approximate counter on throw. `PromptTokenCounting` itself is unchanged so existing call
+    sites and tests stay green; `ApproximatePromptTokenCounter` remains the default for
+    no-runtime contexts (early-init, unit tests).
+  - **Truncation by measured tokens.** `truncate(_:toTokens:mode:)` now binary-searches the
+    largest `Character`-aligned `prefix`/`suffix` slice whose `tokenCount(...)` is `<= budget`.
+    `preserveEnd` keeps the tail (text nearest the caret, used by `beforeCursor`),
+    `preserveStart` keeps the head (used by `afterCursor`). Character-boundary cuts mean
+    multi-byte content (emoji, CJK) splits safely.
+  - **Budget model now accounts for rendering overhead.** `allocate(...)` charges each section's
+    rendered heading (`[Heading]\n`) plus the `\n\n` separator before it against the remaining
+    budget, and reserves the chatML wrapper overhead up front in `buildPrompt(...)`. A final-fit
+    pass walks lowest-priority sections first (and `beforeCursor` last) to absorb any residual
+    tokenizer non-linearity, so the rendered prompt is guaranteed to measure
+    `<= maxPromptTokens` under the real counter. `estimatedTokenCount` is computed against the
+    rendered string with the real counter.
+  - **Empirical cold-prefill curve.** Added `PrefillLatencyBenchmarkTests` (skippable when the
+    GGUF is missing) measuring cold-prefill p90 for prompts of `[64, 128, 256, 512, 768, 1024,
+    1536, 2048, 3072, 4096]` tokens against the M2 `LlamaModelRuntime` with the local
+    `Qwen3.5-2B-Base-Q4_K_M` GGUF on Apple Silicon (Metal, debug build). Measured curve on the
+    reference machine:
+
+    | tokens | p50 ms | p90 ms |
+    | -----: | -----: | -----: |
+    |     64 |   17.7 |   29.3 |
+    |    128 |   20.8 |   21.0 |
+    |    256 |   30.2 |   30.6 |
+    |    512 |   50.7 |   50.8 |
+    |    768 |   81.4 |  100.9 |
+    |   1024 |  102.2 |  102.5 |
+    |   1536 |  155.1 |  155.4 |
+    |   2048 |  209.1 |  209.7 |
+    |   3072 |  325.5 |  335.9 |
+    |   4096 |  473.1 |  482.4 |
+
+    Cold-prefill p90 fits the 200 ms budget up to **1536 tokens**; **2048 just busts it
+    (209 ms)** and **4096 takes ~482 ms** to cold-prefill.
+
+  - **Default `maxPromptTokens` = 4096 (steady-state-sized, not cold-sized).** Despite the
+    cold cliff above, we ship `PromptBuilder.defaultMaxPromptTokens = 4096`. The reasoning is
+    that with KV prefix reuse, the cold cost is paid **once per stable context** (focus change,
+    or whenever the suffix the user is typing into stops sharing a prefix with the previous
+    prompt), while every subsequent keystroke only re-decodes the changed suffix:
+      - Identical re-`prepare` (full prefix reuse): ~0.01 ms — a measured no-op.
+      - Extend by one token on top of a 512-token prefix: ~52 ms (hybrid attention; pure-
+        attention models would be cheaper).
+    For autocomplete UX the per-keystroke cost is what matters, and the per-keystroke cost is
+    independent of `maxPromptTokens` once the prefix stabilises. The cold ~480 ms at 4096
+    is a noticeable but rare cost (and is over a debug build — release will be faster). The
+    `LlamaModelRuntime` default `contextLength` is bumped to **4096** to match so the runtime
+    can hold a full-budget prompt without reslicing the KV cache. If we ever decide the cold
+    cost is too painful on slower hardware, the right knob is to lower `defaultMaxPromptTokens`
+    back toward `1536` (the cold-budget-respecting ceiling); the benchmark stays the source of
+    truth.
+  - **Writing-history seam.** `Prompting` gained `WritingHistoryProviding` /
+    `InMemoryWritingHistoryStore` / `WritingHistoryQuery` (selection dimensions from
+    `docs/02-prompting.md`: bundle, domain, typingContext, language, recency/longest mixing,
+    same-app-only flag, fetch/budget caps). The store is empty by default and lives entirely
+    in-memory; persisted history is M8. The app wires it via a new
+    `KeyTypeModuleGraph.makePrompt(for:)` assembler that also threads
+    `CompletionPolicy.customInstructions` from `AppCompatibility` so `Prompting` stays
+    `AppCompatibility`-free.
+- Consequences:
+  - `Prompting` now depends on `ModelRuntime` (protocols + stub, no llama). Mirrors the edge
+    `ConstrainedGeneration` already had, so the package graph stays acyclic and llama stays
+    isolated to the `LlamaModelRuntime` target.
+  - Tests under `Packages/Prompting/Tests/PromptingTests` use `UTF8FallbackTokenizer` so the
+    golden-prompt snapshot and budget math are deterministic (1 ASCII byte = 1 token). They
+    cover golden snapshots (base + chatML body), preserve-end/preserve-start truncation, stable
+    section ordering with `beforeCursor` last in base mode, clean omission of empty optional
+    sections, and the budget guarantee under tight `maxPromptTokens`.
+  - `defaultMaxPromptTokens = 4096` is a *steady-state* decision: justified by KV prefix reuse,
+    not by the cold-prefill curve. If we change the model family/size, or ship release builds,
+    or want to weight the cold path more (e.g. on slower hardware where ~480 ms feels bad), the
+    right move is to re-run the benchmark and adjust the constant rather than guess. The
+    benchmark is intentionally `XCTSkipUnless`-gated so it stays opt-in but is trivial to
+    re-run. The cold-budget-respecting ceiling on this hardware is `1536`; the original M3
+    target was `1024`; bumping to `4096` consciously trades cold-prefill latency for context
+    room.
+  - Truncation uses a binary search calling `tokenCounter.tokenCount(for:)` `O(log N)` times per
+    section. For `LlamaTokenizer` (sync C API, thread-safe per llama.h) this is on the order of
+    a dozen tokenize calls per oversized section, which is well inside the prefill budget.
+
+## ADR-009 — ACPF on-disk token-profile schema (M4)
+
+- Date: 2026-05-29
+- Status: accepted
+- Context: M4 needs a clean-room, on-device, memory-mappable token profile so the sampler
+  can apply tokenizer-specific suppression, biasing, and prefix walking without ever
+  going back to the GGUF. Cotypist's `FEBI` is closed-source; we have to ship our own
+  format and decide every detail (layout, hashing, classifier rules, packaging).
+- Decision:
+  - **One little-endian image, offset-based.** Every reference into the file is an
+    absolute file offset (never a pointer), so the file can be `Data(contentsOf:options:
+    .alwaysMapped)`'d and dereferenced through `UnsafeRawBufferPointer.loadUnaligned(...)`
+    without a decode pass. Apple Silicon + Intel are both little-endian; we still funnel
+    every load/store through `.littleEndian` so the format is correct on a hypothetical
+    big-endian host.
+  - **64-byte section alignment.** Every section starts on a 64-byte boundary so the
+    file maps cleanly onto cache lines. The header carries a fixed `(offset, length,
+    item_size, item_count) × SectionKind.count` table; the reader bounds-checks once at
+    `open(...)` time and never again.
+  - **Stable `SectionKind` ordinals.** `tokenTable = 0, tokenBytes = 1, prefixTrie = 2,
+    prefixBuckets = 3, specialLists = 4, biasTables = 5, validation = 6`. Once assigned
+    an ordinal cannot be reused for a different purpose; the schema version (`UInt16` in
+    the header) bumps when the meaning of any section changes.
+  - **Token table is fixed-size 32-byte records.** `TokenProfileRecordRaw` packs
+    `bytes_offset/len`, `flags`, `static_bias`, `display_width`, `token_type`,
+    `first_byte`, and a trie-terminal back-link in 32 bytes. Indexed directly by token
+    id (no hash table at runtime). `first_byte = 256` is the empty-bytes sentinel;
+    `trieTerminal = UInt16.max` is the "no terminal in trie" sentinel.
+  - **Tokenizer identity = SHA-256 over `LE(vocabSize) || foreach id: LE(len) || bytes`,
+    low 128 bits packed into `tokenizer_hash_lo/hi`.** Recomputed by
+    `MmapAutocompleteProfile.open(at:tokenizerVocabSize:tokenizerBytes:)` and compared
+    to the header; a mismatch throws `ACPFOpenError.tokenizerDigestMismatch`. 128 bits
+    is overkill for drift detection and keeps the digest field at 16 bytes inside the
+    header. We deliberately do **not** also embed a checksum of the bytes blob — a
+    corrupted blob will fail the open-time digest recompute, so a separate CRC would be
+    redundant.
+  - **Trie layout: flat `TrieNodeRaw + TrieEdge[]` in one section.** Nodes hold
+    `terminal_token_id`, `first_edge_index`, `byte_edge_count`. Edges are 8 bytes each
+    (byte + 3 bytes padding + UInt32 child index), sorted by byte so the runtime can
+    binary-search children in O(log k). Terminal id is also cached in the per-token
+    record's `trieTerminal` field so frequent lookups skip the walk from root. The
+    fuzz test (`testRandomPrefixesNeverTrap`) asserts the cursor never traps regardless
+    of input bytes.
+  - **Per-mode bias model.** `static_bias` is per-token. Per-mode adjustments live in
+    BIAS_TABLES as sparse `(token_id, Δ)` pairs, sorted by id within each mode, so the
+    default lookup is one load (and the override lookup is one dictionary hit which the
+    reader pre-materialises). Six modes: `prose / code / terminal / emoji / correction /
+    singleLine` (`BiasMode.allCases`). Encoding `singleLine` as a *mode*, even though
+    the API surface treats it as a per-request flag, keeps the on-disk table layout
+    uniform; the reader applies it on top of the chosen `CompletionMode` when
+    `isSingleLine == true`.
+  - **`isSingleLine` is a flag, not a `CompletionMode`.** `CompletionMode` stays in
+    `AutocompleteCore` unchanged (no source breakage downstream); `MmapAutocompleteProfile`
+    exposes `isExcluded(_:mode:isSingleLine:)` and `bias(for:mode:isSingleLine:)`
+    overloads on top of the existing protocol so the sampler can opt in without forcing
+    every consumer to think about newline policy.
+  - **Packaging: classifier/format pure in `TokenProfiles`; builder in its own package.**
+    `TokenProfiles` depends only on `AutocompleteCore` — every validation test runs
+    against a synthetic vocab without llama. The offline CLI lives in
+    `Packages/ProfileBuilder` and depends on `TokenProfiles` + `LlamaModelRuntime`; the
+    seam is `VocabIntrospecting` (declared in `LlamaModelRuntime`) so the protocol
+    itself never escapes the llama-aware module boundary.
+  - **Validation surface.** `ProfileSelfCheck` is the single source of truth shared
+    between unit tests and the CLI's post-write check. Header / section bounds /
+    alignment / digest match are tested as distinct `ACPFOpenError` cases so failures
+    name the exact mode. `RoundTripStabilityTests` proves the encoder is deterministic
+    and that re-decoded profiles produce the same engine ranking for the same logits.
+  - **Storage = Application Support, not the repo.** Generated profiles live at
+    `~/Library/Application Support/KeyType/Models/<family>.acpf.bin`, side-by-side with
+    the GGUFs. No `.gitignore` rule needed (they're outside the repo by construction).
+    `ModelContainer.profileURL(family:)` is the single resolver; `Scripts/build-acpf-
+    profile.sh` and `KeyTypeModuleGraph.makeProfile(runtime:family:)` both go through
+    it.
+  - **First profile: Qwen3.5/3.6 shared tokenizer.** Family label `qwen3-v151936`
+    (kept as the script's default even though the locally-installed GGUF clocks a
+    larger vocab; the label is a tokenizer-family identifier, not a vocab size). The
+    builder produces ~24 MB for ~248 k tokens, which is well under the steady-state
+    memory ceiling and maps lazily — actual resident bytes are bounded by what the
+    runtime touches.
+- Consequences:
+  - The runtime can validate any profile at open time in O(vocab × avg-token-bytes) for
+    the digest, then O(1) per token-id lookup afterwards. No JSON, no Codable, no
+    runtime parsing.
+  - `MmapAutocompleteProfile.tokenAllowed(_:in:)` requires walking the token's bytes
+    from the cursor's `nodeIndex` to a node whose terminal id matches — this is the
+    M5-friendly "is this token a legal next emit" semantics. The writer-correctness
+    invariant ("token T's terminal lives at the node reached by walking T's bytes from
+    the root") is exposed through `terminalTokenID(at: TrieState)` and used by the
+    self-check + tests.
+  - Adding a new tokenizer family is now: run `Scripts/build-acpf-profile.sh` with a
+    different `FAMILY` and `GGUF`; the rest of the system already supports it.
+  - The classifier rules + bias policy are starting points; they live as named
+    constants inside `BiasPolicy.swift` so M5/M6 can tune them without changing call
+    sites.
+  - Future schema bumps revise `currentSchemaVersion`. The reader rejects any other
+    value, so a stale `.acpf.bin` from an old build is detected before any field is
+    used.
+
+## ADR-010 — Constrained multi-branch decoding (M5)
+
+- Date: 2026-05-30
+- Status: accepted
+- Context: M5 replaces the greedy single-branch loop in `ConstrainedGenerationEngine` with
+  real constrained decoding: a multi-branch search honouring `branchWidth` /
+  `relativeCutoff` / `minBranchProbability`, top-k / top-p / temperature shaping with
+  cumulative log-probability scoring, required-prefix + byte/trie admissibility from the
+  ACPF profile, incremental UTF-8-validated detokenization, the full stop-condition set,
+  and prompt cancellation. The central tension is that beam search wants to evaluate logits
+  at *many* token paths, while the `LocalModelRuntime` protocol (ADR-007) is deliberately
+  **linear** (`prepare` / `decodeNext` / `logitsForNextToken`, one KV cache) and must stay
+  stable so `StubModelRuntime` keeps working for tests.
+- Decision:
+  - **Drive the search over the existing protocol via re-`prepare`.** To score a frontier
+    branch the engine calls `runtime.prepare(promptTokens: basePrompt + branchTokens)` then
+    `logitsForNextToken()`. No protocol change; the stub stays usable; `LlamaModelRuntime`'s
+    documented KV prefix-reuse (ADR-008) means the common prefix is not re-decoded. The
+    cost is extra decodes when sibling branches don't share a suffix; with the autocomplete
+    defaults (`maxCompletionTokens` 4, small `branchWidth`, branches dying early on stop /
+    admissibility / pruning) this is acceptable for M5's *functional* acceptance bar.
+    Efficient KV-fork (`llama_memory_seq_cp` to clone a sequence and decode one extra token
+    per branch) is the obvious follow-up optimization and is the reason M2 listed the seq
+    ops; it can be added later behind an optional capability without touching the protocol
+    or `AutocompleteCore`.
+  - **Deterministic best-first beam, not stochastic sampling.** Expansion keeps the
+    highest cumulative-logprob branches; `temperature` / `topK` / `topP` only *shape the
+    per-step candidate pool* (`TokenSampler.rank`). No RNG — autocomplete must be
+    reproducible and testable, and "prefer suppression to a wrong suggestion" argues against
+    sampling noise. `relativeCutoff` is a cumulative-logprob **margin** (drop a branch when
+    `bestScore − branchScore > relativeCutoff`); `minBranchProbability` is a per-step
+    probability floor on which tokens may extend a branch (always keeping at least the best
+    so a sharp distribution still yields a candidate).
+  - **Profile-agnostic admissibility.** Required-prefix + byte/trie admissibility use the
+    `AutocompleteProfile` protocol method `tokenAllowed(_:afterRequiredPrefix:)`
+    (`bytes.starts(with: prefix) || prefix.starts(with: bytes)`), which the
+    `MmapAutocompleteProfile` backs with its byte blob / trie. A per-branch
+    `remainingPrefix` is advanced as tokens are emitted (`GenerationBranch.consumePrefix`),
+    so a required prefix can be satisfied across several tokens, and only prefix-satisfied
+    branches are ever finalized. Keeping the engine on the protocol (not the concrete mmap
+    type) means every search test runs against `InMemoryAutocompleteProfile` with no model
+    or profile file.
+  - **Incremental, byte-level UTF-8 validation.** Branches accumulate raw token bytes;
+    `UTF8Scanner` distinguishes a genuinely malformed sequence (`.invalid` → drop the
+    branch) from a merely incomplete trailing multi-byte sequence (`.pending` → keep
+    accumulating, decode only the valid prefix). A branch is finalized only when its bytes
+    are fully valid (`.valid`), so no candidate ever ends mid-scalar.
+  - **Stop conditions.** A branch stops when (a) the model's single most likely raw next
+    token is a hard stop — EOS/EOT (`ModelMetadata`) or a `.stopAndSuppress` (`STOP`-flag)
+    token — in which case the text so far is kept; (b) an emitted token is `.stopAndDisplay`
+    (sentence-end) — the token is appended then the branch finalized; (c) the candidate
+    would exceed `maxDisplayWidth`; (d) `maxCompletionTokens` is reached; or (e) there is no
+    admissible / in-policy continuation. Hard-stop tokens are never displayed.
+  - **Cancellation via cooperative `Task` cancellation.** The engine calls
+    `Task.checkCancellation()` at each depth and before each branch's decode, so the app can
+    cancel an in-flight completion by cancelling its `Task` when a newer keystroke arrives;
+    generation then throws `CancellationError` promptly rather than running to completion.
+  - **Testing seam: `TreeScriptedModelRuntime`.** Added a public, path-keyed runtime to the
+    `ModelRuntime` package (sibling to `StubModelRuntime`) that returns logits as a function
+    of the full token sequence — the step-based stub cannot represent the path-dependent
+    logits multi-branch search needs. An optional per-call delay makes generation observably
+    in-flight for the cancellation test. The protocol surface is unchanged.
+- Consequences:
+  - `ConstrainedGeneration` keeps its constructor and `CompletionGenerating` conformance;
+    `DecodingConfiguration` gains `minBranchProbability` and `maxCandidates`. The engine is
+    split into `DecodingConfiguration`, `TokenSampler`, `GenerationBranch`, and the
+    orchestrating `ConstrainedGenerationEngine`.
+  - A `ConstrainedGenerationTests` target was added (the package had none). Deterministic
+    tests cover multi-branch ranking, the three pruning knobs, single/multi-token required
+    prefix, invalid-UTF8 and over-width dropping, EOS / suppress / sentence-end stops,
+    cancellation, and policy gates. A `XCTSkipUnless`-gated integration test exercises a real
+    `LlamaModelRuntime` + `MmapAutocompleteProfile`.
+  - The re-`prepare` strategy trades per-branch decode cost for protocol stability. If
+    profiling shows the cold re-decodes hurt per-keystroke latency, the fix is KV-fork via
+    `seq_cp`, exposed as an optional runtime capability the engine prefers when available.
+

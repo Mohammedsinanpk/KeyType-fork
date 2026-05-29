@@ -49,6 +49,19 @@ public enum ModelContainer {
         try modelsDirectoryURL().appendingPathComponent(filename, isDirectory: false)
     }
 
+    /// Filename of a profile for a given tokenizer family — e.g.
+    /// `"qwen3-v151936"` → `"qwen3-v151936.acpf.bin"`.
+    public static func profileFilename(family: String) -> String {
+        "\(family).acpf.bin"
+    }
+
+    /// URL of a token-profile binary for `family`, sitting beside the GGUF inside
+    /// `<container>/Models/`. The file is never inside the repo; see ADR-009.
+    public static func profileURL(family: String, create: Bool = false) throws -> URL {
+        let dir = try modelsDirectoryURL(create: create)
+        return dir.appendingPathComponent(profileFilename(family: family), isDirectory: false)
+    }
+
     /// `true` iff the default model is present on disk and looks like a non-empty file.
     public static func defaultModelExists() -> Bool {
         guard let url = try? modelURL() else { return false }

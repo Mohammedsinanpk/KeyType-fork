@@ -26,11 +26,81 @@ enum KeyTypeModuleGraph {
         )
     }
 
-    static func makePromptBuilder() -> PromptBuilder {
-        PromptBuilder()
+    /// Builds a `PromptBuilder`. Pass a real `ModelTokenizing` (e.g. the loaded
+    /// `LlamaModelRuntime.tokenizer`) once the runtime is available so budgeting and
+    /// truncation match what the model will actually see (M3 acceptance). Without a
+    /// tokenizer we fall back to the approximate counter — useful before the model is
+    /// loaded and for unit tests.
+    static func makePromptBuilder(
+        tokenizer: ModelTokenizing? = nil,
+        maxPromptTokens: Int = PromptBuilder.defaultMaxPromptTokens
+    ) -> PromptBuilder {
+        let counter: PromptTokenCounting = tokenizer.map { TokenizerPromptTokenCounter(tokenizer: $0) }
+            ?? ApproximatePromptTokenCounter()
+        return PromptBuilder(tokenCounter: counter, maxPromptTokens: maxPromptTokens)
     }
 
     static func makeCompatibilityStore() -> AppCompatibilityStore {
         AppCompatibilityStore()
+    }
+
+    /// Local writing-history store. Currently an empty in-memory stub; M8 swaps in a
+    /// real on-disk store fed by the user's recent typing.
+    static func makeWritingHistory() -> WritingHistoryProviding {
+        InMemoryWritingHistoryStore()
+    }
+
+    /// Default tokenizer family the app expects a profile for. Qwen3.5 and Qwen3.6
+    /// share this vocab, so one profile covers both models.
+    static let defaultProfileFamily: String = "qwen3-v151936"
+
+    /// Memory-maps the ACPF profile sitting in Application Support (built by
+    /// `Scripts/build-acpf-profile.sh`) and validates it against the live tokenizer.
+    /// The validation step rehashes the live vocab once at open time and rejects a
+    /// stale profile up front. M5's sampler will consume this as its
+    /// `AutocompleteProfile` rather than the in-memory placeholder.
+    static func makeProfile(
+        runtime: LocalModelRuntime,
+        family: String = defaultProfileFamily
+    ) throws -> AutocompleteProfile {
+        let url = try ModelContainer.profileURL(family: family)
+        return try MmapAutocompleteProfile.open(
+            at: url,
+            tokenizerVocabSize: runtime.metadata.vocabularySize,
+            tokenizerBytes: { try runtime.tokenizer.rawBytes(for: $0) },
+            expectedModelFamily: family
+        )
+    }
+
+    /// Assembles a prompt for the given focused-field context. Pulls
+    /// `customInstructions` from `AppCompatibility`'s `CompletionPolicy` and
+    /// `previousUserInputs` from the local writing-history store — both required by
+    /// M3. The app owns the wiring so `Prompting` doesn't depend on
+    /// `AppCompatibility`.
+    static func makePrompt(
+        for context: TextFieldContext,
+        builder: PromptBuilder = makePromptBuilder(),
+        compatibilityStore: AppCompatibilityStore = makeCompatibilityStore(),
+        history: WritingHistoryProviding = makeWritingHistory(),
+        pasteboardText: String? = nil,
+        screenText: String? = nil,
+        mode: PromptTemplateMode = .baseContinuation
+    ) -> PromptBuildResult {
+        let policy = compatibilityStore.policy(for: context.target)
+        let query = WritingHistoryQuery(
+            bundleIdentifier: context.target.bundleIdentifier,
+            domain: context.target.domain,
+            typingContext: context.typingContext,
+            language: context.detectedLanguage
+        )
+        let samples = history.samples(for: query)
+        return builder.buildPrompt(
+            context: context,
+            customInstructions: policy.customInstructions,
+            previousUserInputs: samples,
+            pasteboardText: pasteboardText,
+            screenText: screenText,
+            mode: mode
+        )
     }
 }

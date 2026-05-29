@@ -82,13 +82,18 @@ GGUF, tokenize/detokenize, decode batches, read next-token logits, expose EOS/EO
 keystrokes (research §8). Keep the `LocalModelRuntime` protocol stable so the stub stays usable
 for tests.
 
-### `ConstrainedGeneration` — the decoding loop ✅(greedy)
-`ConstrainedGenerationEngine: CompletionGenerating` already: checks `AppCompatibility` policy,
-tokenizes via runtime, filters with profile exclusions + required-prefix, applies static bias,
-ranks logits, advances branches, stops on width/`stopBehavior`. Currently **greedy single-branch**.
-Target: real multi-branch search (`branchWidth`, `relativeCutoff`, `minBranchProbability`),
-proper top-k/top-p/temperature sampling, byte-level trie admissibility from the profile, and
-incremental detokenization with UTF-8 validity.
+### `ConstrainedGeneration` — the decoding loop ✅(multi-branch)
+`ConstrainedGenerationEngine: CompletionGenerating` performs real constrained decoding (M5,
+ADR-010): a deterministic best-first **multi-branch** search honouring `branchWidth`,
+`relativeCutoff` (cumulative-logprob margin), and `minBranchProbability`; top-k/top-p/temperature
+shaping with cumulative log-probability scoring (`TokenSampler`); required-prefix + byte/trie
+admissibility from the profile (`tokenAllowed(_:afterRequiredPrefix:)`, advanced per branch);
+incremental UTF-8-validated detokenization (`GenerationBranch` + `UTF8Scanner`); and stop on
+EOS/EOT, `.stopAndSuppress`, sentence-end (`.stopAndDisplay`), display-width limit,
+`maxCompletionTokens`, or an inadmissible transition. It drives the linear `LocalModelRuntime`
+protocol by re-`prepare`-ing `basePrompt + branchTokens` (KV prefix-reuse keeps it cheap; KV-fork
+is a future optimization) and honours cooperative `Task` cancellation so a newer keystroke aborts
+in-flight work.
 
 ### `TokenProfiles` — vocabulary intelligence ✅(in-memory) / 🟡(on-disk)
 `AutocompleteProfile` protocol + `InMemoryAutocompleteProfile` + `TokenProfileFlags` +

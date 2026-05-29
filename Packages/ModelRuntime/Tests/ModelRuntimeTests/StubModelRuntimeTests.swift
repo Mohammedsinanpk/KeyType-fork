@@ -39,4 +39,27 @@ final class StubModelRuntimeTests: XCTestCase {
         let l2 = try await runtime.logitsForNextToken()
         XCTAssertEqual(l2, [])
     }
+
+    func testTreeScriptedRuntimeReturnsPathDependentLogits() async throws {
+        let rootLogits = [TokenLogit(tokenID: 65, logit: 1.0)]
+        let childLogits = [TokenLogit(tokenID: 66, logit: 2.0)]
+        let runtime = TreeScriptedModelRuntime(logitsByPath: [
+            [10, 11]: rootLogits,
+            [10, 11, 65]: childLogits
+        ])
+
+        // Re-preparing different paths yields different logits (unlike the step-based stub).
+        try await runtime.prepare(promptTokens: [10, 11])
+        let atRoot = try await runtime.logitsForNextToken()
+        XCTAssertEqual(atRoot, rootLogits)
+
+        try await runtime.prepare(promptTokens: [10, 11, 65])
+        let atChild = try await runtime.logitsForNextToken()
+        XCTAssertEqual(atChild, childLogits)
+
+        // Unknown path -> empty (no continuation).
+        try await runtime.prepare(promptTokens: [10, 11, 99])
+        let unknown = try await runtime.logitsForNextToken()
+        XCTAssertEqual(unknown, [])
+    }
 }
