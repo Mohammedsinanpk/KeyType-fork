@@ -22,6 +22,20 @@ public struct LlamaTokenizer: ModelTokenizing, @unchecked Sendable {
     }
 
     public func tokenize(_ text: String) throws -> [TokenID] {
+        try tokenize(text, parseSpecial: false)
+    }
+
+    /// Tokenize with `parse_special: true` so control markers in the text (e.g.
+    /// `<|fim_prefix|>`, `<|fim_suffix|>`, `<|fim_middle|>`, `<|endoftext|>`) are encoded as
+    /// their single dedicated vocab tokens instead of being split into literal angle-bracket
+    /// bytes. The normal `tokenize(_:)` path keeps `parse_special: false` so user text can
+    /// never smuggle in control tokens; this variant is reserved for prompt scaffolding the
+    /// app constructs itself (fill-in-the-middle assembly).
+    public func tokenizeAllowingSpecial(_ text: String) throws -> [TokenID] {
+        try tokenize(text, parseSpecial: true)
+    }
+
+    private func tokenize(_ text: String, parseSpecial: Bool) throws -> [TokenID] {
         let utf8Count = Int32(text.utf8.count)
         // Start with a generous upper bound; we grow on demand if llama_tokenize asks for more.
         var capacity: Int32 = max(8, utf8Count + 8)
@@ -36,7 +50,7 @@ public struct LlamaTokenizer: ModelTokenizing, @unchecked Sendable {
                         buf.baseAddress,
                         Int32(buf.count),
                         /* add_special */ false,
-                        /* parse_special */ false
+                        /* parse_special */ parseSpecial
                     )
                 }
             }

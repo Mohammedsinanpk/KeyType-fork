@@ -825,3 +825,51 @@ text. Both are now closed:
     need a clean build); the Tab tap must never swallow Tab with no completion visible; the pasteboard
     restore delay is a heuristic — tune per app if a target misses the paste.
 
+## ADR-017: Production completion quality — caret boundary, FIM, environment-context policy
+
+- Status: accepted
+- Context: After M6 shipped end-to-end, live quality lagged far behind the deterministic suite.
+  `PromptStrategyProbeTests` (an on-device A/B/C harness added this round, with
+  `LlamaTokenizer.tokenizeAllowingSpecial` for native FIM tokens) located the gap. Crucially it
+  **overturned** the initial hypothesis that the bracketed prompt scaffolding was at fault: the
+  scaffolding actually *stabilizes* the small base model on prose (bare inputs produced garbage).
+  The real causes were (1) trailing whitespace at the caret — the live prefix ends in the space the
+  user just typed, which makes the model wander and also yields double spaces on insertion; (2)
+  mid-line suffix collisions — base continuation duplicates `afterCursor`; (3) code-editor metadata
+  bias — the Xcode window title etc. pushed prose toward code/numbers; and (4) tests that only
+  sampled ideal inputs, so "green" never reflected production.
+- Decision:
+  - **Keep the scaffolding** (it helps); fix the boundary instead. `PromptBuilder` trims trailing
+    whitespace from the `beforeCursor` section so the base model continues a clean word boundary.
+    A pure `AutocompleteCore.CaretBoundary.reconcile(_:beforeCursor:)` re-aligns the candidate
+    against the *original* prefix — strips a leading newline artifact, and drops the model's leading
+    separator space when the live text already ends in whitespace (kills the double space).
+    `CompletionController.present` stores the **reconciled** candidate so overlay and Tab/Shift+Tab
+    insertion agree; an empty-after-reconcile result is suppressed.
+  - **Native fill-in-the-middle** for mid-line. `DecodingConfiguration.enableFillInMiddle` gates it;
+    `ModelTokenizing` gains `tokenizeAllowingSpecial` (default = `tokenize`). When enabled,
+    `afterCursor` is non-empty, and the three FIM markers each resolve to a single token on the
+    loaded model, `ConstrainedGenerationEngine` decodes
+    `<|fim_prefix|>{trimmed prefix}<|fim_suffix|>{suffix}<|fim_middle|>` built from the raw context
+    (not the scaffolded prompt); otherwise it falls back to base continuation. Markers are control
+    tokens (suppressed by the ACPF profile) so they never leak. Enabled in the app **only after**
+    the probe confirmed it beats the base path on the mid-line cases (clean `"France."` / `"a + b"`
+    vs colliding `" France is Paris."` / `" a + b + 1"`; weak only on the `Please/let` case).
+  - **Reduce metadata for code editors/terminals.** `TargetOverride.environmentContextDisabled` →
+    `CompletionPolicy.includesEnvironmentContext`; `PromptBuilder.buildPrompt(includeEnvironmentContext:)`
+    omits `generalInfo` + `textFieldProperties` when false. Seeded for Xcode, VS Code, iTerm, and
+    Terminal. Cursor-local text and the instruction header are always kept.
+  - **Representative tests.** `CaretBoundaryTests` + a deterministic `FillInMiddleAssemblyTests`
+    (stub tokenizer, recording runtime) asserting FIM token order and all fallback paths;
+    `PromptBuilder` assertions for trailing-whitespace trimming and env-context omission;
+    `QualitativeDemoTests.testPrintProductionLikeInputs` and the extended probe exercise
+    trailing-space, mid-line, and suffix-collision inputs (and print the reconciled "field" result).
+- Consequences:
+  - Prose trailing-space cases insert cleanly (no double space); mid-line completions stop
+    duplicating the suffix; code editors no longer get prose nudged toward numbers.
+  - FIM is measurement-gated, not assumed — if a future model lacks single-token FIM markers the
+    engine silently uses base continuation.
+  - Watch-items: the `Please/let`-style mid-line case is still weak under FIM (model-dependent);
+    the trailing-whitespace trim is intentionally aggressive (drops trailing newlines too) — revisit
+    if a target needs newline-preserving continuations.
+

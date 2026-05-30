@@ -141,6 +141,51 @@ final class QualitativeDemoTests: XCTestCase {
         print("\n=====================================================================================\n")
     }
 
+    /// Production-like inputs the old demos never covered: trailing whitespace at the caret,
+    /// mid-line completion (non-empty after-cursor), and suffix collisions. Mirrors what the live
+    /// app captures, and applies the same `CaretBoundary.reconcile` the app uses so the printed
+    /// "field" column is what the user would actually see inserted. FIM is enabled. See ADR-017.
+    func testPrintProductionLikeInputs() async throws {
+        let (engine, _) = try loadEngine(
+            configuration: DecodingConfiguration(maxCandidates: 5, enableFillInMiddle: true)
+        )
+        let target = AppTarget(bundleIdentifier: "com.test.app", appName: "Test")
+
+        // (before-cursor, after-cursor)
+        let cases: [(String, String)] = [
+            ("The capital of France is ", ""),         // trailing space (append)
+            ("I'll see you ", ""),                     // trailing space (append)
+            ("Thanks so much for your ", ""),          // trailing space (append)
+            ("The capital of ", "is Paris."),          // mid-line: fill "France"
+            ("Please ", " me know if you have any questions."), // mid-line: fill "let"
+            ("def add(a, b):\n    return ", "\n")       // mid-line code: fill "a + b"
+        ]
+
+        print("\n================ KeyType production-like inputs (FIM on) ================")
+        for (before, after) in cases {
+            // The prompt string mimics the PromptBuilder boundary fix (trailing-trimmed prefix);
+            // FIM mid-line ignores it and assembles from context.
+            let promptText = String(before.reversed().drop { $0.isWhitespace }.reversed())
+            let request = CompletionRequest(
+                context: TextFieldContext(beforeCursor: before, afterCursor: after, target: target),
+                prompt: promptText,
+                mode: .prose,
+                maxCompletionTokens: 6,
+                maxDisplayWidth: 60
+            )
+            let candidates = try await engine.completions(for: request)
+            print("\nBEFORE: \(display(before))   AFTER: \(display(after))")
+            if candidates.isEmpty { print("  (suppressed — no candidate)") }
+            for (i, c) in candidates.prefix(2).enumerated() {
+                let reconciled = CaretBoundary.reconcile(c.text, beforeCursor: before)
+                let field = before + reconciled + after
+                let warn = field.contains("  ") ? "  [DOUBLE SPACE]" : ""
+                print("  [\(i)] raw=\(display(c.text)) → field=\(display(field))\(warn)")
+            }
+        }
+        print("\n========================================================================\n")
+    }
+
     /// Completions across many languages/scripts, each with its `detectedLanguage` set so the typo
     /// guard uses the right dictionary (and is conservatively inert where none exists).
     func testPrintMultilingualGenerations() async throws {

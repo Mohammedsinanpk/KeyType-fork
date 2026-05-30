@@ -12,6 +12,7 @@ let package = Package(
         .package(path: "../AppCompatibility"),
         .package(path: "../AutocompleteCore"),
         .package(path: "../ModelRuntime"),
+        .package(path: "../Prompting"),
         .package(path: "../TokenProfiles")
     ],
     targets: [
@@ -36,6 +37,7 @@ let package = Package(
                 .product(name: "AutocompleteCore", package: "AutocompleteCore"),
                 .product(name: "ModelRuntime", package: "ModelRuntime"),
                 .product(name: "LlamaModelRuntime", package: "ModelRuntime"),
+                .product(name: "Prompting", package: "Prompting"),
                 .product(name: "TokenProfiles", package: "TokenProfiles")
             ]
         )

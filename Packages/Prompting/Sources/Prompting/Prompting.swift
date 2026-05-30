@@ -123,14 +123,16 @@ public struct PromptBuilder {
         previousUserInputs: [String] = [],
         pasteboardText: String? = nil,
         screenText: String? = nil,
-        mode: PromptTemplateMode = .baseContinuation
+        mode: PromptTemplateMode = .baseContinuation,
+        includeEnvironmentContext: Bool = true
     ) -> PromptBuildResult {
         let sections = makeSections(
             context: context,
             customInstructions: customInstructions,
             previousUserInputs: previousUserInputs,
             pasteboardText: pasteboardText,
-            screenText: screenText
+            screenText: screenText,
+            includeEnvironmentContext: includeEnvironmentContext
         )
         let templateOverhead = tokenCount(for: templateOverheadString(mode: mode))
         let contentBudget = max(0, maxPromptTokens - templateOverhead)
@@ -154,7 +156,8 @@ public struct PromptBuilder {
         customInstructions: [String],
         previousUserInputs: [String],
         pasteboardText: String?,
-        screenText: String?
+        screenText: String?,
+        includeEnvironmentContext: Bool
     ) -> [PromptSection] {
         var sections: [PromptSection] = [
             PromptSection(
@@ -164,21 +167,33 @@ public struct PromptBuilder {
                 priority: 100,
                 minBudget: 16,
                 maxBudget: 96
-            ),
-            PromptSection(
-                name: "generalInfo",
-                heading: "General information",
-                content: "Application: \(context.target.appName)\nBundle identifier: \(context.target.bundleIdentifier)\nWindow title: \(context.target.windowTitle ?? "")\nContext: \(context.typingContext ?? "")",
-                priority: 60,
-                maxBudget: 192
-            ),
-            PromptSection(
-                name: "textFieldProperties",
-                heading: "Text field properties",
-                content: "Placeholder: \(context.placeholder ?? "")\nLabels: \(context.labels.joined(separator: ", "))\nLanguage: \(context.detectedLanguage ?? "")",
-                priority: 65,
-                maxBudget: 192
-            ),
+            )
+        ]
+
+        // App/window/field metadata. Omitted for code editors and terminals, where it biases the
+        // model toward code/numbers rather than the user's prose (see ADR-017).
+        if includeEnvironmentContext {
+            sections.append(
+                PromptSection(
+                    name: "generalInfo",
+                    heading: "General information",
+                    content: "Application: \(context.target.appName)\nBundle identifier: \(context.target.bundleIdentifier)\nWindow title: \(context.target.windowTitle ?? "")\nContext: \(context.typingContext ?? "")",
+                    priority: 60,
+                    maxBudget: 192
+                )
+            )
+            sections.append(
+                PromptSection(
+                    name: "textFieldProperties",
+                    heading: "Text field properties",
+                    content: "Placeholder: \(context.placeholder ?? "")\nLabels: \(context.labels.joined(separator: ", "))\nLanguage: \(context.detectedLanguage ?? "")",
+                    priority: 65,
+                    maxBudget: 192
+                )
+            )
+        }
+
+        sections.append(contentsOf: [
             PromptSection(
                 name: "afterCursor",
                 heading: "Text after cursor",
@@ -190,13 +205,17 @@ public struct PromptBuilder {
             PromptSection(
                 name: "beforeCursor",
                 heading: "Text before cursor",
-                content: context.beforeCursor,
+                // Trailing whitespace at the caret makes a base model wander (it must emit a word
+                // with no leading space, which it does poorly) and produces double-space artifacts
+                // on insertion. Feed the clean word boundary; the caller re-aligns the candidate's
+                // leading space against the live text via `CaretBoundary.reconcile`. See ADR-017.
+                content: Self.trimmingTrailingWhitespace(context.beforeCursor),
                 priority: 100,
                 minBudget: 64,
                 maxBudget: 2048,
                 truncationMode: .preserveEnd
             )
-        ]
+        ])
 
         if !customInstructions.isEmpty {
             sections.append(
@@ -426,6 +445,16 @@ public struct PromptBuilder {
 
     private func tokenCount(for text: String) -> Int {
         tokenCounter.tokenCount(for: text)
+    }
+
+    /// Drops trailing whitespace (spaces, tabs, newlines) so the base-model prompt ends exactly at
+    /// a word boundary. See the `beforeCursor` section and ADR-017.
+    static func trimmingTrailingWhitespace(_ text: String) -> String {
+        var view = Substring(text)
+        while let last = view.last, last.isWhitespace {
+            view = view.dropLast()
+        }
+        return String(view)
     }
 
     /// Section ordering in the final prompt. `beforeCursor` is last in base mode so the

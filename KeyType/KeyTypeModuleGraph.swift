@@ -124,7 +124,8 @@ enum KeyTypeModuleGraph {
             previousUserInputs: samples,
             pasteboardText: pasteboardText,
             screenText: screenText,
-            mode: mode
+            mode: mode,
+            includeEnvironmentContext: policy.includesEnvironmentContext
         )
     }
 }

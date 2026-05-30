@@ -50,6 +50,47 @@ the cursor. Only use for instruct-tuned models that need it.
 **Key design rule:** the prompt must never invite the model to explain, answer, or discuss. The
 single most natural continuation of the bytes after the cursor is the goal.
 
+## Caret-boundary sanitization (ADR-017)
+
+The live `beforeCursor` usually ends in the space the user just typed (`"…is "`). A base model
+continues a *clean word boundary* (`"…is"` → `" Paris."`) far better than a dangling space
+(`"…is "` → it wanders), so:
+
+- **Prompt side:** `PromptBuilder` trims trailing whitespace from the `beforeCursor` section
+(`trimmingTrailingWhitespace`). The model now always sees the clean boundary and emits a leading
+separator space.
+- **Candidate side:** `AutocompleteCore.CaretBoundary.reconcile(_:beforeCursor:)` re-aligns the
+generated text against the *original* (untrimmed) prefix before display/insertion: it strips a
+leading newline artifact, and — when the real text already ends in whitespace — drops the model's
+leading separator space so the field never gets a double space. The controller stores the
+*reconciled* candidate, so the overlay and the Tab/Shift+Tab accept paths agree.
+
+## Mid-line: native fill-in-the-middle (ADR-017)
+
+When the caret has non-empty `afterCursor`, base continuation tends to duplicate the suffix
+(`"The capital of " | "is Paris."` → `" France is Paris."`). For models with trained FIM tokens
+(`<|fim_prefix|>` / `<|fim_suffix|>` / `<|fim_middle|>` each a single vocab token), the
+`ConstrainedGenerationEngine` instead assembles, from the raw context (not the scaffolded prompt):
+
+```
+<|fim_prefix|>{trailing-trimmed prefix}<|fim_suffix|>{suffix}<|fim_middle|>
+```
+
+This is gated by `DecodingConfiguration.enableFillInMiddle` and falls back to base continuation when
+disabled, when there is no suffix, or when the markers don't resolve to single tokens on the loaded
+model. The FIM markers are control tokens (suppressed by the ACPF profile) so they never leak into
+output, and `CaretBoundary.reconcile` strips the leading newline FIM tends to prepend. Enabled in
+the app after the on-device `PromptStrategyProbeTests` confirmed it beats the base path on mid-line
+cases.
+
+## Environment-context policy (ADR-017)
+
+The bracketed scaffolding *helps* small base models on prose, but the app/window/field **metadata**
+(`generalInfo`, `textFieldProperties`) biases them toward code/numbers inside code editors and
+terminals. `PromptBuilder.buildPrompt(includeEnvironmentContext:)` omits those two sections when
+`CompletionPolicy.includesEnvironmentContext` is false, which `AppCompatibility` sets for targets
+with `TargetOverride.environmentContextDisabled` (Xcode, VS Code, iTerm, Terminal).
+
 ## Personalization: `previousUserInputs`
 
 Local writing history conditions style without fine-tuning. Selection dimensions (store these in

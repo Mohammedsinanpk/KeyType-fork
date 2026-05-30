@@ -39,10 +39,7 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
         guard policy.isCompletionEnabled else { return [] }
         guard policy.allowsMidLineCompletion || request.context.afterCursor.isEmpty else { return [] }
 
-        let basePrompt = try runtime.tokenizer.tokenize(request.prompt)
-        // A short tail of the prompt so sentence-boundary disambiguation can see context that
-        // precedes the generated text (e.g. an abbreviation the prompt ends on).
-        let promptTail = String(request.prompt.suffix(32))
+        let (basePrompt, promptTail) = try makeBasePrompt(for: request)
 
         // Drops branches whose current word completes into a misspelling, mid-search, so the beam
         // keeps exploring correctly-spelled continuations instead (see ADR-015 / CurrentWordTypoGuard).
@@ -136,6 +133,50 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
         }
 
         return makeCandidates(from: finalized, mode: request.mode)
+    }
+
+    // MARK: - Prompt assembly
+
+    static let fimPrefixMarker = "<|fim_prefix|>"
+    static let fimSuffixMarker = "<|fim_suffix|>"
+    static let fimMiddleMarker = "<|fim_middle|>"
+
+    /// Returns the token sequence to decode plus a short text tail (for sentence-boundary checks).
+    /// Uses native fill-in-the-middle for mid-line requests when enabled and supported by the
+    /// model; otherwise tokenizes the caller-assembled `request.prompt` (base continuation).
+    private func makeBasePrompt(for request: CompletionRequest) throws -> (tokens: [TokenID], tail: String) {
+        if let fim = try fillInMiddlePrompt(for: request) {
+            return fim
+        }
+        // A short tail of the prompt so sentence-boundary disambiguation can see context that
+        // precedes the generated text (e.g. an abbreviation the prompt ends on).
+        return (try runtime.tokenizer.tokenize(request.prompt), String(request.prompt.suffix(32)))
+    }
+
+    /// Assembles `<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>` from the raw context
+    /// (not the scaffolded `request.prompt`). Returns `nil` — so the caller falls back to base
+    /// continuation — when FIM is disabled, there is no suffix, or the model's vocab does not encode
+    /// the markers as single tokens.
+    private func fillInMiddlePrompt(for request: CompletionRequest) throws -> (tokens: [TokenID], tail: String)? {
+        guard configuration.enableFillInMiddle, !request.context.afterCursor.isEmpty else { return nil }
+        let tokenizer = runtime.tokenizer
+        let pre = try tokenizer.tokenizeAllowingSpecial(Self.fimPrefixMarker)
+        let suf = try tokenizer.tokenizeAllowingSpecial(Self.fimSuffixMarker)
+        let mid = try tokenizer.tokenizeAllowingSpecial(Self.fimMiddleMarker)
+        // A model without trained FIM tokens splits the markers into several literal tokens — that
+        // is the signal to fall back rather than feed it angle-bracket text it can't use.
+        guard pre.count == 1, suf.count == 1, mid.count == 1 else { return nil }
+
+        let prefixText = Self.trimmingTrailingWhitespace(request.context.beforeCursor)
+        let prefix = try tokenizer.tokenize(prefixText)
+        let suffix = try tokenizer.tokenize(request.context.afterCursor)
+        return (pre + prefix + suf + suffix + mid, String(prefixText.suffix(32)))
+    }
+
+    static func trimmingTrailingWhitespace(_ text: String) -> String {
+        var view = Substring(text)
+        while let last = view.last, last.isWhitespace { view = view.dropLast() }
+        return String(view)
     }
 
     // MARK: - Helpers

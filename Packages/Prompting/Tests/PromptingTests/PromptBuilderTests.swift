@@ -140,6 +140,58 @@ final class PromptBuilderGoldenTests: XCTestCase {
     }
 }
 
+final class PromptBuilderBoundaryTests: XCTestCase {
+    /// Trailing whitespace at the caret is trimmed so a base model continues from a clean word
+    /// boundary (and so insertion doesn't double the separator space). See ADR-017.
+    func testTrailingWhitespaceTrimmedFromBeforeCursor() {
+        let builder = PromptBuilder(tokenCounter: makeCounter(), maxPromptTokens: 1024)
+        let result = builder.buildPrompt(context: makeContext(
+            beforeCursor: "The capital of France is ",
+            afterCursor: ""
+        ))
+        XCTAssertTrue(
+            result.prompt.hasSuffix("The capital of France is"),
+            "prompt must end at the word boundary, not a dangling space; got: '\(String(result.prompt.suffix(30)))'"
+        )
+        XCTAssertFalse(result.prompt.hasSuffix("is "))
+
+        let before = result.sections.first { $0.name == "beforeCursor" }
+        XCTAssertEqual(before?.content, "The capital of France is")
+    }
+
+    func testTrailingNewlinesAndTabsTrimmed() {
+        let builder = PromptBuilder(tokenCounter: makeCounter(), maxPromptTokens: 1024)
+        let result = builder.buildPrompt(context: makeContext(beforeCursor: "Dear team,\n\n\t", afterCursor: ""))
+        let before = result.sections.first { $0.name == "beforeCursor" }
+        XCTAssertEqual(before?.content, "Dear team,")
+    }
+
+    /// Code editors / terminals pass `includeEnvironmentContext: false`, which drops the app/window
+    /// and field-property metadata that biases a base model toward code and numbers. See ADR-017.
+    func testEnvironmentContextOmittedWhenDisabled() {
+        let builder = PromptBuilder(tokenCounter: makeCounter(), maxPromptTokens: 1024)
+        let result = builder.buildPrompt(context: makeContext(), includeEnvironmentContext: false)
+
+        let names = result.sections.map(\.name)
+        XCTAssertFalse(names.contains("generalInfo"))
+        XCTAssertFalse(names.contains("textFieldProperties"))
+        XCTAssertFalse(result.prompt.contains("[General information]"))
+        XCTAssertFalse(result.prompt.contains("[Text field properties]"))
+        // Cursor-local sections and the instruction header remain.
+        XCTAssertTrue(names.contains("beforeCursor"))
+        XCTAssertTrue(result.prompt.contains("[Completion instructions]"))
+        XCTAssertTrue(result.prompt.hasSuffix("Hi Maya,\nThanks for sending this over."))
+    }
+
+    func testEnvironmentContextIncludedByDefault() {
+        let builder = PromptBuilder(tokenCounter: makeCounter(), maxPromptTokens: 1024)
+        let result = builder.buildPrompt(context: makeContext())
+        let names = result.sections.map(\.name)
+        XCTAssertTrue(names.contains("generalInfo"))
+        XCTAssertTrue(names.contains("textFieldProperties"))
+    }
+}
+
 final class PromptBuilderTruncationTests: XCTestCase {
     /// Oversized `beforeCursor` must be tail-truncated (preserve-end) — the text
     /// nearest the caret stays, and the prompt still fits inside `maxPromptTokens`.

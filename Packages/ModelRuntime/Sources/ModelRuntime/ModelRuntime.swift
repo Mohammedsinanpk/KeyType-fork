@@ -40,6 +40,17 @@ public protocol ModelTokenizing {
     func tokenize(_ text: String) throws -> [TokenID]
     func detokenize(_ tokenIDs: [TokenID]) throws -> String
     func rawBytes(for tokenID: TokenID) throws -> [UInt8]
+    /// Tokenize while parsing control markers (e.g. `<|fim_prefix|>`) into their single dedicated
+    /// vocab tokens rather than literal text. Used only for app-constructed scaffolding such as
+    /// fill-in-the-middle assembly. Defaults to plain `tokenize(_:)` for tokenizers that don't
+    /// distinguish special tokens (the FIM caller detects the no-op via marker token counts).
+    func tokenizeAllowingSpecial(_ text: String) throws -> [TokenID]
+}
+
+public extension ModelTokenizing {
+    func tokenizeAllowingSpecial(_ text: String) throws -> [TokenID] {
+        try tokenize(text)
+    }
 }
 
 public protocol LocalModelRuntime {

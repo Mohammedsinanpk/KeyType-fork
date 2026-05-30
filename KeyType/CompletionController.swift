@@ -201,10 +201,28 @@ final class CompletionController {
             clearCompletion()
             return
         }
-        predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SHOWN \"\(PredictionLog.escape(best.text))\"")
-        visibleCandidate = best
+
+        // Re-align the candidate's leading whitespace against the live text so we neither lose nor
+        // double the separator space (the prompt was built from a trailing-trimmed prefix). See
+        // ADR-017 / CaretBoundary.
+        let reconciledText = CaretBoundary.reconcile(best.text, beforeCursor: request.context.beforeCursor)
+        guard !reconciledText.isEmpty else {
+            predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SUPPRESS(emptyAfterBoundary)")
+            clearCompletion()
+            return
+        }
+        let candidate = reconciledText == best.text ? best : CompletionCandidate(
+            text: reconciledText,
+            tokenIDs: best.tokenIDs,
+            logProbability: best.logProbability,
+            displayWidth: best.displayWidth,
+            mode: best.mode
+        )
+
+        predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SHOWN \"\(PredictionLog.escape(candidate.text))\"")
+        visibleCandidate = candidate
         visibleContext = request.context
-        presenter.show(candidate: best, placement: placement, font: font)
+        presenter.show(candidate: candidate, placement: placement, font: font)
     }
 
     private func clearCompletion() {
@@ -286,6 +304,10 @@ final class CompletionController {
             runtime: runtime,
             profile: profile,
             compatibilityStore: compatibilityStore,
+            // Native fill-in-the-middle for mid-line completion (the on-device probe confirmed it
+            // beats base continuation, which collides with the after-cursor text). Falls back to
+            // base continuation when there is no suffix or the model lacks FIM tokens. See ADR-017.
+            configuration: DecodingConfiguration(enableFillInMiddle: true),
             wordRecognizer: SystemWordRecognizer()
         )
     }

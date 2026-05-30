@@ -25,6 +25,12 @@ public struct DecodingConfiguration: Equatable {
     public var minBranchProbability: Float
     /// Upper bound on the number of finalized candidates returned to the caller.
     public var maxCandidates: Int
+    /// When true, mid-line requests (non-empty `afterCursor`) are decoded with native
+    /// fill-in-the-middle: the prompt is assembled as `<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}
+    /// <|fim_middle|>` so the model conditions on the suffix instead of colliding with it. Requires
+    /// a model whose vocab has single-token FIM markers; otherwise the engine falls back to base
+    /// continuation. See ADR-017.
+    public var enableFillInMiddle: Bool
 
     public init(
         topK: Int = 64,
@@ -33,7 +39,8 @@ public struct DecodingConfiguration: Equatable {
         branchWidth: Int = 4,
         relativeCutoff: Float = 6,
         minBranchProbability: Float = 0.02,
-        maxCandidates: Int = 5
+        maxCandidates: Int = 5,
+        enableFillInMiddle: Bool = false
     ) {
         self.topK = topK
         self.topP = topP
@@ -42,5 +49,6 @@ public struct DecodingConfiguration: Equatable {
         self.relativeCutoff = relativeCutoff
         self.minBranchProbability = minBranchProbability
         self.maxCandidates = maxCandidates
+        self.enableFillInMiddle = enableFillInMiddle
     }
 }

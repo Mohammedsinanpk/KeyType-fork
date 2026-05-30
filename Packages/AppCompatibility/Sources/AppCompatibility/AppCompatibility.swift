@@ -14,6 +14,10 @@ public struct TargetOverride: Equatable {
     public var fontSizeAdjustmentFactor: Double
     public var verticalAlignmentOffset: Double
     public var customInstructions: String?
+    /// Drop app/window/field metadata from the prompt for this target. Helpful for code editors and
+    /// terminals, where that metadata (e.g. an Xcode window title) biases a base model toward code
+    /// and numbers instead of the user's prose. See ADR-017.
+    public var environmentContextDisabled: Bool
 
     public init(
         bundleIdentifier: String? = nil,
@@ -27,7 +31,8 @@ public struct TargetOverride: Equatable {
         stringInjectionChunkSize: Int? = nil,
         fontSizeAdjustmentFactor: Double = 1,
         verticalAlignmentOffset: Double = 0,
-        customInstructions: String? = nil
+        customInstructions: String? = nil,
+        environmentContextDisabled: Bool = false
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.domain = domain
@@ -41,6 +46,7 @@ public struct TargetOverride: Equatable {
         self.fontSizeAdjustmentFactor = fontSizeAdjustmentFactor
         self.verticalAlignmentOffset = verticalAlignmentOffset
         self.customInstructions = customInstructions
+        self.environmentContextDisabled = environmentContextDisabled
     }
 
     public func matches(_ target: AppTarget) -> Bool {
@@ -65,6 +71,9 @@ public struct CompletionPolicy: Equatable {
     public var fontSizeAdjustmentFactor: Double
     public var verticalAlignmentOffset: Double
     public var customInstructions: [String]
+    /// Whether app/window/field metadata is included in the prompt. False for code editors and
+    /// terminals (see `TargetOverride.environmentContextDisabled` / ADR-017).
+    public var includesEnvironmentContext: Bool
 
     public init(
         isCompletionEnabled: Bool = true,
@@ -76,7 +85,8 @@ public struct CompletionPolicy: Equatable {
         stringInjectionChunkSize: Int? = nil,
         fontSizeAdjustmentFactor: Double = 1,
         verticalAlignmentOffset: Double = 0,
-        customInstructions: [String] = []
+        customInstructions: [String] = [],
+        includesEnvironmentContext: Bool = true
     ) {
         self.isCompletionEnabled = isCompletionEnabled
         self.allowsMidLineCompletion = allowsMidLineCompletion
@@ -88,6 +98,7 @@ public struct CompletionPolicy: Equatable {
         self.fontSizeAdjustmentFactor = fontSizeAdjustmentFactor
         self.verticalAlignmentOffset = verticalAlignmentOffset
         self.customInstructions = customInstructions
+        self.includesEnvironmentContext = includesEnvironmentContext
     }
 }
 
@@ -114,6 +125,9 @@ public struct AppCompatibilityStore {
             if override.trainingDataCollectionDisabled {
                 policy.allowsTrainingDataCollection = false
             }
+            if override.environmentContextDisabled {
+                policy.includesEnvironmentContext = false
+            }
 
             policy.insertionRequiresPasteAndMatchStyle = policy.insertionRequiresPasteAndMatchStyle || override.requiresPasteAndMatchStyle
             policy.insertionRequiresNonBreakingSpace = policy.insertionRequiresNonBreakingSpace || override.requiresNonBreakingSpaceWorkaround
@@ -134,7 +148,25 @@ public struct AppCompatibilityStore {
             bundleIdentifier: "com.apple.Terminal",
             midLineCompletionsDisabled: true,
             trainingDataCollectionDisabled: true,
-            customInstructions: "Respect shell syntax and avoid prose-style continuations."
+            customInstructions: "Respect shell syntax and avoid prose-style continuations.",
+            environmentContextDisabled: true
+        ),
+        TargetOverride(
+            bundleIdentifier: "com.googlecode.iterm2",
+            midLineCompletionsDisabled: true,
+            trainingDataCollectionDisabled: true,
+            customInstructions: "Respect shell syntax and avoid prose-style continuations.",
+            environmentContextDisabled: true
+        ),
+        // Code editors: the window title / app metadata biases a base model toward code and
+        // numbers, so we strip environment context and keep only the cursor-local text. ADR-017.
+        TargetOverride(
+            bundleIdentifier: "com.apple.dt.Xcode",
+            environmentContextDisabled: true
+        ),
+        TargetOverride(
+            bundleIdentifier: "com.microsoft.VSCode",
+            environmentContextDisabled: true
         ),
         TargetOverride(
             bundleIdentifier: "com.google.Chrome",
