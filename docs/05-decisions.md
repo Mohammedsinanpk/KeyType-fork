@@ -913,3 +913,43 @@ text. Both are now closed:
     callers) and `anchoredLogits` (snapshot/restore, used by the beam). They share seq 0 but
     `anchoredLogits` always restores from its own snapshot, so interleaving is self-correcting.
 
+## ADR-019: Mid-word token healing (fix the ranking, not the symptom)
+
+- Status: accepted
+- Context: `predictions.log` showed the worst completions were *mid-word*: typing `"The weather is
+  gre"` surfaced `"asy."` (greasy), `"I will see you tom"` surfaced `"orow."` (a misspelling),
+  `"…the be"` surfaced `"ehive."` (beehive). The defect is **ranking**, not display: a good word
+  (`great`, `tomorrow`, `beach`) loses to a worse one. The root cause is a tokenization-boundary
+  artifact. The prompt ends *inside* a token (`"… gre"`), so the base model must continue from a
+  subword state instead of choosing the natural whole-word token `" great"` — which is unreachable
+  once `gre` has been committed. In that distorted state a cheaper subword (`"asy"`) can outscore
+  the right one (`"at"`). A first attempt suppressed these via stem length / abandonment heuristics
+  in the candidate filter; that only hides the symptom (shows nothing) and was rejected.
+- Decision: **token healing.** When the caret sits mid-word at end-of-line, back the prompt up to
+  the last clean token boundary and constrain regeneration to the removed bytes via the existing
+  `requiredPrefixBytes` machinery, then strip the re-emitted stem from what is shown/inserted.
+  - `AutocompleteCore.MidWordHealing.plan(for:)` splits `beforeCursor` into `head` (everything up to
+    the last whitespace) and `heal` (that whitespace + the partial word, e.g. `" gre"`). It fires
+    only when: `afterCursor` is empty, the prefix ends in a letter/number (actively typing a word),
+    and `head` is non-empty (there is real context before the word). Whitespace is used as the
+    boundary because BPE tokens begin at whitespace; capitalisation is preserved automatically since
+    the constraint is byte-exact (so proper nouns like `" Wat"` → `" Waterloo"` heal correctly).
+  - `CompletionController` builds the prompt from `head` and sets `requiredPrefixBytes = heal`. The
+    decoder's admissibility (`tokenAllowed`/`GenerationBranch.remainingPrefix`,
+    `tokenBytes.starts(with: prefix) || prefix.starts(with: tokenBytes)`) already constrains the
+    beam to tokens consistent with the typed bytes, so `" great"` is reachable *and* ranked by the
+    model's natural distribution. The completion (e.g. `" great today."`) has its `heal` prefix
+    stripped (`MidWordHealing.strip`) before `CaretBoundary.reconcile`, yielding the ghost text
+    `"at today."`. The token/width budgets are bumped by the heal length so the re-emitted stem does
+    not eat the continuation's allowance.
+- Consequences:
+  - On-device probe (`PromptStrategyProbeTests.testMidWordHealingProbe`): healing reorders
+    `greasy → great`, `tomorow → tomorrow`, `beehive → beach`, validating the root-cause fix.
+  - Bonus latency win: while typing within a word the `head` (and thus the KV anchor of ADR-018) is
+    **constant** across keystrokes — only `requiredPrefixBytes` grows — so the prompt is not
+    re-prefilled per character.
+  - Healing can occasionally find no admissible path (a stem whose bytes no token cleanly spells);
+    that yields no candidate, which is safe (show nothing) and preferable to a wrong guess. Mid-line
+    mid-word is left to native FIM (ADR-017); healing is scoped to end-of-line append.
+  - The candidate filter keeps its taxonomy unchanged; no mid-word suppression heuristic remains.
+

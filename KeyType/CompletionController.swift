@@ -155,20 +155,26 @@ final class CompletionController {
         // Resolve the field font and foreground color now, on the main actor, before suspending
         // into generation, so the ghost text matches the field's typeface and color.
         let style = FieldFontResolver.currentStyle()
-        predictionLog.append(String(
-            format: "STYLE font=%@ size=%.1f color=%@ caretH=%.1f",
-            style.font?.fontName ?? "nil",
-            style.font?.pointSize ?? -1,
-            style.color.flatMap { $0.usingColorSpace(.sRGB) }.map { String(format: "%.2f,%.2f,%.2f", $0.redComponent, $0.greenComponent, $0.blueComponent) } ?? "nil",
-            placement.cursorRect.height
-        ))
-        let promptResult = KeyTypeModuleGraph.makePrompt(for: context, compatibilityStore: compatibilityStore)
+
+        // Token healing (ADR-019): when the caret sits mid-word, prompt from the last clean token
+        // boundary and constrain regeneration to the already-typed bytes, so the model can reach
+        // the natural whole-word token (" great") instead of being stuck in a subword state where a
+        // worse word (" greasy") outranks it. The re-emitted stem is stripped before display in
+        // `present`. When there is no heal the request is the plain whole-prefix continuation.
+        let heal = MidWordHealing.plan(for: context)
+        let promptContext = heal.map { context.replacingBeforeCursor($0.head) } ?? context
+        let promptResult = KeyTypeModuleGraph.makePrompt(for: promptContext, compatibilityStore: compatibilityStore)
+        let requiredPrefixBytes = heal.map { Array($0.heal.utf8) } ?? []
+        // The re-emitted stem consumes part of the token/width budget, so widen both by the heal's
+        // length to preserve the continuation's allowance.
+        let healSlack = heal?.heal.count ?? 0
         let request = CompletionRequest(
             context: context,
             prompt: promptResult.prompt,
+            requiredPrefixBytes: requiredPrefixBytes,
             mode: .prose,
-            maxCompletionTokens: 4,
-            maxDisplayWidth: 60
+            maxCompletionTokens: 4 + (healSlack > 0 ? 2 : 0),
+            maxDisplayWidth: 60 + healSlack
         )
 
         // Debounce: coalesce rapid keystrokes, and DON'T hide the current ghost up front — we
@@ -217,10 +223,17 @@ final class CompletionController {
             return
         }
 
+        // When the prompt was healed (ADR-019), the completion re-emits the already-typed stem
+        // (" great today."); strip it back off so only the genuinely new text ("at today.") is shown
+        // and inserted.
+        let completion = request.requiredPrefixBytes.isEmpty
+            ? best.text
+            : MidWordHealing.strip(best.text, heal: String(decoding: request.requiredPrefixBytes, as: UTF8.self))
+
         // Re-align the candidate's leading whitespace against the live text so we neither lose nor
         // double the separator space (the prompt was built from a trailing-trimmed prefix). See
         // ADR-017 / CaretBoundary.
-        let reconciledText = CaretBoundary.reconcile(best.text, beforeCursor: request.context.beforeCursor)
+        let reconciledText = CaretBoundary.reconcile(completion, beforeCursor: request.context.beforeCursor)
         guard !reconciledText.isEmpty else {
             predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SUPPRESS(emptyAfterBoundary)")
             clearCompletion()
@@ -236,7 +249,7 @@ final class CompletionController {
 
         predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SHOWN \"\(PredictionLog.escape(candidate.text))\"")
         visibleCandidate = candidate
-        visibleRawText = best.text
+        visibleRawText = completion
         visibleContext = request.context
         presenter.show(candidate: candidate, placement: placement, font: style.font, textColor: style.color)
     }

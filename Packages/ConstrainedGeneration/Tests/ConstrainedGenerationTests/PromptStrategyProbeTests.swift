@@ -138,7 +138,77 @@ final class PromptStrategyProbeTests: XCTestCase {
         print("\n===============================================================\n")
     }
 
+    /// Confirms the mid-word *ranking* defect is a tokenization-boundary artifact, and that token
+    /// healing fixes it. For each mid-word prefix we print the engine's ranked candidates:
+    ///   (A) current behaviour — full prefix ("…is gre"), no constraint. The prefix ends mid-token,
+    ///       so the model continues from a subword state and "greasy" can outrank "great".
+    ///   (C) healed — back up to the last token boundary ("…is") and constrain regeneration to the
+    ///       removed bytes (" gre") via requiredPrefixBytes. The model now picks the natural
+    ///       whole-word token " great". The displayed completion strips the already-typed heal text.
+    func testMidWordHealingProbe() async throws {
+        let (runtime, profile) = try load()
+        let engine = makeEngine(runtime, profile)
+        let cases = [
+            "The weather is gre",
+            "I will see you tom",
+            "This is a necess",
+            "Let's go to the be"
+        ]
+        print("\n================ mid-word token-healing probe ================")
+        for before in cases {
+            guard let (head, heal) = Self.healSplit(before) else { continue }
+            let plain = try await engineCandidates(
+                engine, prompt: productionPrompt(before: before, after: ""), before: before, prefix: []
+            )
+            let healed = try await engineCandidates(
+                engine, prompt: productionPrompt(before: head, after: ""), before: head, prefix: Array(heal.utf8)
+            )
+            print("\nBEFORE: \(disp(before))   head=\(disp(head))  heal=\(disp(heal))")
+            print("  (A) no heal : \(plain.map { disp($0.text) }.joined(separator: ", "))")
+            print("  (C) healed  : \(healed.map { disp($0.text) }.joined(separator: ", "))")
+            if let best = healed.first {
+                let shown = best.text.hasPrefix(heal) ? String(best.text.dropFirst(heal.count)) : best.text
+                print("      → shown after stripping heal: \(disp(shown))   field=\(disp(before + shown))")
+            }
+        }
+        print("\n==============================================================\n")
+    }
+
+    /// Splits a mid-word prefix into the head (up to the last clean token boundary) and the heal
+    /// text (the last whitespace + the partial word). `nil` when the prefix does not end mid-word.
+    static func healSplit(_ before: String) -> (head: String, heal: String)? {
+        guard let last = before.last, !last.isWhitespace else { return nil }
+        var start = before.endIndex
+        while start > before.startIndex {
+            let p = before.index(before: start)
+            if before[p].isWhitespace { break }
+            start = p
+        }
+        if start > before.startIndex {
+            let p = before.index(before: start)
+            if before[p].isWhitespace { start = p } // fold the single separating space into the heal text
+        }
+        return (String(before[..<start]), String(before[start...]))
+    }
+
     // MARK: - Helpers
+
+    private func engineCandidates(
+        _ engine: ConstrainedGenerationEngine,
+        prompt: String,
+        before: String,
+        prefix: [UInt8]
+    ) async throws -> [CompletionCandidate] {
+        let request = CompletionRequest(
+            context: TextFieldContext(beforeCursor: before, afterCursor: "", target: target, detectedLanguage: "en"),
+            prompt: prompt,
+            requiredPrefixBytes: prefix,
+            mode: .prose,
+            maxCompletionTokens: 6,
+            maxDisplayWidth: 60
+        )
+        return try await engine.completions(for: request)
+    }
 
     private func productionPrompt(before: String, after: String) -> String {
         let ctx = TextFieldContext(
