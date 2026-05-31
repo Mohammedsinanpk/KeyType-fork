@@ -27,11 +27,11 @@
 		4B5450012FC9600000000034 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000035 /* OnboardingView.swift */; };
 		4B5450012FC9600000000036 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000037 /* MenuBarView.swift */; };
 		4B5450012FC9600000000038 /* ContextCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000039 /* ContextCaptureController.swift */; };
-		4B5450012FC9600000000051 /* LlamaModelRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000050 /* LlamaModelRuntime */; };
 		4B5450012FC9600000000041 /* CompletionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000040 /* CompletionController.swift */; };
 		4B5450012FC9600000000043 /* CompletionAcceptanceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000042 /* CompletionAcceptanceController.swift */; };
 		4B5450012FC9600000000045 /* FieldFontResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000044 /* FieldFontResolver.swift */; };
 		4B5450012FC9600000000047 /* SystemWordRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000046 /* SystemWordRecognizer.swift */; };
+		4B5450012FC9600000000051 /* LlamaModelRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000050 /* LlamaModelRuntime */; };
 		4B5450012FC9600000000055 /* PredictionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000054 /* PredictionLog.swift */; };
 		4B5450012FC9600000000062 /* Personalization in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000061 /* Personalization */; };
 		4B5450012FC9600000000064 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000063 /* SettingsStore.swift */; };
@@ -75,11 +75,11 @@
 		4B5450012FC9600000000042 /* CompletionAcceptanceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionAcceptanceController.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000044 /* FieldFontResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldFontResolver.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000046 /* SystemWordRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemWordRecognizer.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000049 /* KeyType.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KeyType.entitlements; sourceTree = "<group>"; };
 		4B5450012FC9600000000054 /* PredictionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionLog.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000063 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingHistoryRecorder.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000067 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		4B5450012FC9600000000049 /* KeyType.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KeyType.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -141,21 +141,9 @@
 		20DD9A7E2FC95AB900BE1F8C /* KeyType */ = {
 			isa = PBXGroup;
 			children = (
-				20DD9A7D2FC95AB900BE1F8C /* KeyTypeApp.swift */,
-				4B5450012FC9600000000031 /* AppDelegate.swift */,
-				4B5450012FC9600000000037 /* MenuBarView.swift */,
-				4B5450012FC9600000000035 /* OnboardingView.swift */,
-				4B5450012FC9600000000033 /* PermissionsManager.swift */,
-				4B5450012FC9600000000039 /* ContextCaptureController.swift */,
-				4B5450012FC9600000000040 /* CompletionController.swift */,
-				4B5450012FC9600000000042 /* CompletionAcceptanceController.swift */,
-				4B5450012FC9600000000044 /* FieldFontResolver.swift */,
-				4B5450012FC9600000000046 /* SystemWordRecognizer.swift */,
-				4B5450012FC9600000000054 /* PredictionLog.swift */,
-				4B5450012FC9600000000063 /* SettingsStore.swift */,
-				4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */,
-				4B5450012FC9600000000067 /* SettingsView.swift */,
-				4B5450012FC960000000000B /* KeyTypeModuleGraph.swift */,
+				20ECCAED2FCBE7B400005943 /* App */,
+				20ECCAEE2FCBE7BF00005943 /* Views */,
+				20ECCAEF2FCBE7D700005943 /* Logic */,
 				4B5450012FC9600000000049 /* KeyType.entitlements */,
 				20DD9A7A2FC95AB900BE1F8C /* Assets.xcassets */,
 			);
@@ -177,6 +165,42 @@
 				20DD9A872FC95ABD00BE1F8C /* KeyTypeUITestsLaunchTests.swift */,
 			);
 			path = KeyTypeUITests;
+			sourceTree = "<group>";
+		};
+		20ECCAED2FCBE7B400005943 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				20DD9A7D2FC95AB900BE1F8C /* KeyTypeApp.swift */,
+				4B5450012FC9600000000031 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		20ECCAEE2FCBE7BF00005943 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				4B5450012FC9600000000037 /* MenuBarView.swift */,
+				4B5450012FC9600000000035 /* OnboardingView.swift */,
+				4B5450012FC9600000000067 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		20ECCAEF2FCBE7D700005943 /* Logic */ = {
+			isa = PBXGroup;
+			children = (
+				4B5450012FC9600000000042 /* CompletionAcceptanceController.swift */,
+				4B5450012FC9600000000040 /* CompletionController.swift */,
+				4B5450012FC9600000000039 /* ContextCaptureController.swift */,
+				4B5450012FC9600000000044 /* FieldFontResolver.swift */,
+				4B5450012FC960000000000B /* KeyTypeModuleGraph.swift */,
+				4B5450012FC9600000000033 /* PermissionsManager.swift */,
+				4B5450012FC9600000000054 /* PredictionLog.swift */,
+				4B5450012FC9600000000063 /* SettingsStore.swift */,
+				4B5450012FC9600000000046 /* SystemWordRecognizer.swift */,
+				4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */,
+			);
+			path = Logic;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -719,10 +743,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ModelRuntime;
 		};
-		4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/Personalization;
-		};
 		4B5450012FC9600000000023 /* XCLocalSwiftPackageReference "Packages/TokenProfiles" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TokenProfiles;
@@ -742,6 +762,10 @@
 		4B5450012FC9600000000027 /* XCLocalSwiftPackageReference "Packages/AppCompatibility" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AppCompatibility;
+		};
+		4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Personalization;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -765,16 +789,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */;
 			productName = ModelRuntime;
-		};
-		4B5450012FC9600000000061 /* Personalization */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */;
-			productName = Personalization;
-		};
-		4B5450012FC9600000000050 /* LlamaModelRuntime */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */;
-			productName = LlamaModelRuntime;
 		};
 		4B5450012FC9600000000015 /* TokenProfiles */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -800,6 +814,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B5450012FC9600000000027 /* XCLocalSwiftPackageReference "Packages/AppCompatibility" */;
 			productName = AppCompatibility;
+		};
+		4B5450012FC9600000000050 /* LlamaModelRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */;
+			productName = LlamaModelRuntime;
+		};
+		4B5450012FC9600000000061 /* Personalization */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */;
+			productName = Personalization;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

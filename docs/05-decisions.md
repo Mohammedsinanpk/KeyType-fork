@@ -1269,3 +1269,81 @@ text. Both are now closed:
     bottom of the whole field.
   - Ghost text remains visible on white web editors even when AX reports unusable styling, while
     native fields and trustworthy colored text continue to inherit the field's own color.
+
+## ADR-030: Treat Cursor as a code editor target
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Computer Use testing against `/Applications/Cursor.app` showed Cursor's local bundle id is
+  `com.todesktop.230313mzl4w4u92`, and its editor surface is a VS Code workbench
+  (`vscode-file://.../workbench.html`). The existing code-editor compatibility rule covered Xcode
+  and VS Code but not Cursor, so Cursor prompts could still include app/window metadata.
+- Decision: Add Cursor's bundle id to the code-editor overrides with
+  `environmentContextDisabled: true`. Keep completions, Tab acceptance, inline overlay preference,
+  and prose mode unchanged.
+- Consequences:
+  - Cursor gets the same prompt-shaping protection as VS Code: cursor-local text remains the signal,
+    while app/window metadata is omitted to avoid biasing base-model continuations toward unrelated
+    code or title text.
+  - The ToDesktop bundle id is now captured in a regression test so future compatibility work does
+    not accidentally drop Cursor coverage.
+
+## ADR-031: Treat WeChat as an explicit chat surface
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Computer Use testing against `/Applications/WeChat.app` showed WeChat's local bundle id is
+  `com.tencent.xinWeChat`. The app shell is visible, but the chat content and compose region are not
+  exposed as normal accessibility text controls to Computer Use, which makes inline geometry and rich
+  insertion more fragile than in standard native fields.
+- Decision: Add WeChat's bundle id to the chat app overrides with chunked Unicode text injection,
+  inline overlay preference, and message-only custom instructions. Add a WeChat-specific
+  keystroke fallback in `MacContextCapture`: when the regular AX snapshot is sparse, KeyType keeps a
+  short local prefix buffer from observed key events and emits an estimated compose-box
+  `TextFieldContext` so the existing generation and Tab-acceptance pipeline can run. Keep
+  completions and Tab acceptance enabled.
+- Consequences:
+  - WeChat suggestions are constrained to short conversational continuations for the current message.
+  - The overlay uses the fallback caret inline with the composed text; mirror mode renders above
+    WeChat's input box and is visually misaligned for this surface.
+  - Accepting a suggestion types the completion into WeChat in small chunks instead of relying on a
+    paste command that may not be supported by the custom editor.
+  - The bundle id is covered by a regression test for future compatibility work.
+
+## ADR-032: Read Apple Mail compose bodies from focused HTML content
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Computer Use testing showed Mail's new-message body focuses an `HTML content` element
+  with description `message body` and `about:blank` URL. The typed body text appears as child text,
+  not as a normal `AXTextArea`/`AXTextField`, so `FocusedFieldReader` could emit an empty context or
+  no usable caret and the completion pipeline suppressed suggestions.
+- Decision: Add a Mail compose-body fallback in `MacContextCapture`. When the focused element belongs
+  to `com.apple.mail` and matches the message body HTML surface, collect text from the element or its
+  child text nodes, preserve the existing Mail policy instructions, and estimate the caret from the
+  compose body frame when AX does not return an exact caret.
+- Consequences:
+  - New-message compose windows now produce a non-empty `TextFieldContext`, allowing normal prompt
+    generation, overlay placement, and Tab acceptance.
+  - The fallback is constrained to Mail's compose body (`message body` / `about:blank`) so viewing
+    received HTML email does not become a completion target.
+
+## ADR-033: Reject container-sized caret bounds in multiline web prompts
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Computer Use testing against Cursor's multiline agent prompt showed Electron can report
+  the focused element as the whole web area and can expose text-like transcript blocks before the
+  actual prompt. It can also return an `AXBoundsForRange` rectangle that is effectively the whole
+  multiline composer, which made ghost text render huge and wrap from the field edge instead of
+  continuing after the active line.
+- Decision: Rank web-area descendant candidates by focused/ranged/settable/editable signals before
+  choosing the text element, mirrored in the app-side font probe. Reject AX caret rectangles that
+  look like the text container and fall back to the conservative current-line estimate. In
+  `CompletionUI`, bound the trusted caret height used for layout/font sizing so one bad rectangle
+  cannot inflate the overlay.
+- Consequences:
+  - Cursor multiline prompts now capture the actual prompt text and active-line caret, with normal
+    inline placement.
+  - The overlay layer has a defensive cap for future web surfaces that briefly return field-sized
+    caret bounds.

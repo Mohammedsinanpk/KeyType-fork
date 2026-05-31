@@ -95,6 +95,22 @@ public final class GhostTextOverlayWindow {
         return max(1, min(singleLineWidth, floor(remaining)))
     }
 
+    static func trustedCaretHeight(for placement: OverlayPlacement, fallbackLineHeight: CGFloat) -> CGFloat {
+        let caretHeight = placement.cursorRect.height
+        guard caretHeight > 0 else {
+            return fallbackLineHeight
+        }
+
+        if let field = placement.fieldRect,
+           !field.isEmpty,
+           field.height >= 40,
+           caretHeight >= field.height * 0.65 {
+            return max(8, min(32, fallbackLineHeight))
+        }
+
+        return max(8, min(48, caretHeight))
+    }
+
     struct Layout: Equatable {
         var frame: CGRect
         var lines: [GhostTextLine]
@@ -102,7 +118,8 @@ public final class GhostTextOverlayWindow {
 
     static func layout(for text: String, font: NSFont, placement: OverlayPlacement) -> Layout {
         let caret = placement.cursorRect
-        let lineHeight = max(caret.height, ceil(font.ascender - font.descender))
+        let fontLineHeight = ceil(font.ascender - font.descender)
+        let lineHeight = max(Self.trustedCaretHeight(for: placement, fallbackLineHeight: fontLineHeight), fontLineHeight)
         let singleLineWidth = ceil(measuredWidth(text, font: font)) + 2
 
         guard
@@ -273,7 +290,11 @@ public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
     /// wrong the caret height corrects it. Falls back to a system font when no field font is known.
     static func resolveFont(_ font: NSFont?, placement: OverlayPlacement) -> NSFont {
         let factor = CGFloat(placement.fontSizeAdjustmentFactor)
-        let caretHeight = placement.cursorRect.height
+        let fallbackLineHeight = font.map { ceil($0.ascender - $0.descender) } ?? ceil(NSFont.systemFont(ofSize: NSFont.systemFontSize).ascender - NSFont.systemFont(ofSize: NSFont.systemFontSize).descender)
+        let caretHeight = GhostTextOverlayWindow.trustedCaretHeight(
+            for: placement,
+            fallbackLineHeight: fallbackLineHeight
+        )
 
         if let font {
             let metricsHeight = font.ascender - font.descender // ascent+descent at font.pointSize

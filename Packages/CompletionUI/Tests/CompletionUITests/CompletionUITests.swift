@@ -206,6 +206,19 @@ final class CompletionUITests: XCTestCase {
         XCTAssertEqual(layout.lines.map(\.leadingInset), [267, 0])
     }
 
+    @MainActor
+    func testGhostTextLayoutIgnoresFieldSizedCaretHeight() {
+        let font = NSFont.systemFont(ofSize: 15)
+        let placement = OverlayPlacement(
+            cursorRect: CGRect(x: 200, y: 100, width: 2, height: 120),
+            fieldRect: CGRect(x: 20, y: 90, width: 700, height: 130)
+        )
+        let layout = GhostTextOverlayWindow.layout(for: "firm that helps companies", font: font, placement: placement)
+
+        XCTAssertLessThanOrEqual(layout.lines.first?.reservedHeight ?? 0, 24)
+        XCTAssertLessThan(layout.frame.height, 40)
+    }
+
     // MARK: - Font resolution
 
     @MainActor
@@ -239,5 +252,19 @@ final class CompletionUITests: XCTestCase {
         // Estimated from caret height (20 * 0.83 ≈ 16.6), clamped into [8, 96].
         XCTAssertGreaterThanOrEqual(resolved.pointSize, 8)
         XCTAssertLessThanOrEqual(resolved.pointSize, 96)
+    }
+
+    @MainActor
+    func testResolveFontIgnoresFieldSizedMultilineCaretHeight() {
+        let field = NSFont.systemFont(ofSize: 15)
+        let placement = OverlayPlacement(
+            cursorRect: CGRect(x: 20, y: 90, width: 2, height: 130),
+            fieldRect: CGRect(x: 20, y: 90, width: 700, height: 130)
+        )
+
+        let resolved = InlineGhostTextPresenter.resolveFont(field, placement: placement)
+
+        XCTAssertEqual(resolved.familyName, field.familyName)
+        XCTAssertEqual(resolved.pointSize, field.pointSize, accuracy: 1)
     }
 }

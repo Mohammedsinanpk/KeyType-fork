@@ -93,7 +93,7 @@ public struct AXCaretGeometryResolver {
                 fromAccessibilityRect: rawRect,
                 anchorFrame: anchorFrame
             )
-            if rectIsNearAnchor(cocoaRect, anchor: anchorFrame) {
+            if rectIsUsableCaretRect(cocoaRect, anchor: anchorFrame) {
                 return AXCaretGeometryResult(
                     rect: normalizedCaretRect(fromZeroLengthRangeRect: cocoaRect),
                     source: "AXBoundsForRange",
@@ -107,7 +107,7 @@ public struct AXCaretGeometryResolver {
                 fromAccessibilityRect: rawMarkerRect,
                 anchorFrame: anchorFrame
             )
-            if rectIsNearAnchor(cocoaRect, anchor: anchorFrame) {
+            if rectIsUsableCaretRect(cocoaRect, anchor: anchorFrame) {
                 return AXCaretGeometryResult(
                     rect: normalizedCaretRect(fromZeroLengthRangeRect: cocoaRect),
                     source: "AXTextMarker",
@@ -129,7 +129,7 @@ public struct AXCaretGeometryResolver {
                 fromAccessibilityRect: rawRect,
                 anchorFrame: anchorFrame
             )
-            if rectIsNearAnchor(cocoaRect, anchor: anchorFrame) {
+            if rectIsUsableCaretRect(cocoaRect, anchor: anchorFrame) {
                 return AXCaretGeometryResult(
                     rect: CGRect(x: cocoaRect.maxX, y: cocoaRect.minY, width: 2, height: cocoaRect.height),
                     source: "AXBoundsForPreviousCharacter",
@@ -393,6 +393,33 @@ public struct AXCaretGeometryResolver {
         return expanded.contains(CGPoint(x: cocoaRect.midX, y: cocoaRect.midY))
     }
 
+    private func rectIsUsableCaretRect(_ cocoaRect: CGRect, anchor: CGRect?) -> Bool {
+        guard rectIsNearAnchor(cocoaRect, anchor: anchor) else {
+            return false
+        }
+        return !Self.rectLooksLikeTextContainer(cocoaRect, anchor: anchor)
+    }
+
+    nonisolated static func rectLooksLikeTextContainer(_ cocoaRect: CGRect, anchor: CGRect?) -> Bool {
+        guard let anchor, !anchor.isEmpty, !cocoaRect.isEmpty else {
+            return false
+        }
+
+        let multilineHeight: CGFloat = 40
+        if anchor.height >= multilineHeight,
+           cocoaRect.height >= anchor.height * 0.65 {
+            return true
+        }
+
+        if anchor.width >= 80,
+           cocoaRect.width >= anchor.width * 0.5,
+           cocoaRect.height >= min(anchor.height * 0.4, multilineHeight) {
+            return true
+        }
+
+        return false
+    }
+
     private func normalizedCaretRect(fromZeroLengthRangeRect rect: CGRect) -> CGRect {
         guard !rect.isEmpty else {
             return rect
@@ -443,6 +470,12 @@ enum AXCaretHelper {
         }
 
         return nil
+    }
+
+    static func isAttributeSettable(_ attribute: CFString, on element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success
+            && settable.boolValue
     }
 
     static func rangeValue(for attribute: CFString, on element: AXUIElement) -> NSRange? {

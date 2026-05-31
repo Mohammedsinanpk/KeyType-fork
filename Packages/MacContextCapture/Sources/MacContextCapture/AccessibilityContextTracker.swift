@@ -36,6 +36,10 @@ public final class AccessibilityContextTracker: NSObject {
     private var safetyPollTimer: Timer?
     private let safetyPollInterval: TimeInterval = 0.5
 
+    private var fallbackEventTap: CFMachPort?
+    private var fallbackRunLoopSource: CFRunLoopSource?
+    private var fallbackBuffer = KeystrokeFallbackTextBuffer()
+
     private var pendingRefresh: DispatchWorkItem?
     private let debounceInterval: TimeInterval = 0.02
 
@@ -64,6 +68,7 @@ public final class AccessibilityContextTracker: NSObject {
         )
 
         retargetObserver()
+        installFallbackKeyTap()
         scheduleSafetyPoll()
         refreshSoon()
     }
@@ -74,6 +79,7 @@ public final class AccessibilityContextTracker: NSObject {
 
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         tearDownObserver()
+        tearDownFallbackKeyTap()
         safetyPollTimer?.invalidate()
         safetyPollTimer = nil
         pendingRefresh?.cancel()
@@ -255,6 +261,13 @@ public final class AccessibilityContextTracker: NSObject {
         }
 
         let snapshot: FocusedFieldSnapshot? = systemFocusedElement().flatMap(reader.snapshot(of:))
+        if let fallback = fallbackSnapshot(replacing: snapshot) {
+            emit(fallback)
+            return
+        }
+        if snapshot.map({ !WeChatFallbackTextContext.isSparseSnapshot($0) }) ?? true {
+            fallbackBuffer.reset()
+        }
         emit(snapshot)
     }
 
@@ -279,6 +292,125 @@ public final class AccessibilityContextTracker: NSObject {
         safetyPollTimer = timer
     }
 
+    // MARK: - WeChat keystroke fallback
+
+    private func installFallbackKeyTap() {
+        guard fallbackEventTap == nil else { return }
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .tailAppendEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: { _, type, event, refcon in
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let tracker = Unmanaged<AccessibilityContextTracker>.fromOpaque(refcon).takeUnretainedValue()
+                Task { @MainActor in
+                    tracker.handleFallbackKeyEvent(type: type, event: event)
+                }
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: refcon
+        ) else {
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        fallbackEventTap = tap
+        fallbackRunLoopSource = source
+    }
+
+    private func tearDownFallbackKeyTap() {
+        if let fallbackEventTap {
+            CGEvent.tapEnable(tap: fallbackEventTap, enable: false)
+        }
+        if let fallbackRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), fallbackRunLoopSource, .commonModes)
+        }
+        fallbackEventTap = nil
+        fallbackRunLoopSource = nil
+        fallbackBuffer.reset()
+    }
+
+    private func handleFallbackKeyEvent(type: CGEventType, event: CGEvent) {
+        guard type == .keyDown else { return }
+        guard frontmostAppTarget().bundleIdentifier == WeChatFallbackTextContext.bundleIdentifier else {
+            fallbackBuffer.reset()
+            return
+        }
+        guard shouldUseWeChatFallbackNow() else {
+            fallbackBuffer.reset()
+            return
+        }
+
+        let flags = event.flags
+        if flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate) {
+            fallbackBuffer.reset()
+            refreshSoon()
+            return
+        }
+
+        switch event.getIntegerValueField(.keyboardEventKeycode) {
+        case 36, 53, 76, 123, 124, 125, 126:
+            fallbackBuffer.reset()
+            refreshSoon()
+            return
+        case 48:
+            return
+        case 51:
+            fallbackBuffer.deleteBackward()
+        default:
+            if let text = unicodeString(from: event) {
+                fallbackBuffer.append(text)
+            }
+        }
+
+        if let fallback = fallbackSnapshot(replacing: nil) {
+            emit(fallback)
+        } else {
+            refreshSoon()
+        }
+    }
+
+    private func shouldUseWeChatFallbackNow() -> Bool {
+        guard let snapshot = systemFocusedElement().flatMap(reader.snapshot(of:)) else {
+            return true
+        }
+        if WeChatFallbackTextContext.isSparseSnapshot(snapshot) {
+            return true
+        }
+        return false
+    }
+
+    private func fallbackSnapshot(replacing snapshot: FocusedFieldSnapshot?) -> FocusedFieldSnapshot? {
+        let target = snapshot?.context.target ?? frontmostAppTarget()
+        guard target.bundleIdentifier == WeChatFallbackTextContext.bundleIdentifier,
+              WeChatFallbackTextContext.isSparseSnapshot(snapshot) || snapshot == nil,
+              !fallbackBuffer.isEmpty else {
+            return nil
+        }
+        return WeChatFallbackTextContext.snapshot(
+            beforeCursor: fallbackBuffer.beforeCursor,
+            target: target,
+            windowFrame: focusedWindowFrame(for: target.bundleIdentifier)
+        )
+    }
+
+    private func unicodeString(from event: CGEvent) -> String? {
+        var chars = [UniChar](repeating: 0, count: 16)
+        var length = 0
+        event.keyboardGetUnicodeString(
+            maxStringLength: chars.count,
+            actualStringLength: &length,
+            unicodeString: &chars
+        )
+        guard length > 0 else { return nil }
+        return String(utf16CodeUnits: chars, count: length)
+    }
+
     // MARK: - Helpers
 
     private func systemFocusedElement() -> AXUIElement? {
@@ -292,5 +424,31 @@ public final class AccessibilityContextTracker: NSObject {
             return nil
         }
         return (focused as! AXUIElement)
+    }
+
+    private func frontmostAppTarget() -> AppTarget {
+        let app = NSWorkspace.shared.frontmostApplication
+        return AppTarget(
+            bundleIdentifier: app?.bundleIdentifier ?? "unknown",
+            appName: app?.localizedName ?? "Unknown"
+        )
+    }
+
+    private func focusedWindowFrame(for bundleIdentifier: String) -> CGRect? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.bundleIdentifier == bundleIdentifier else {
+            return nil
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = AXCaretHelper.copyAttributeValue(kAXFocusedWindowAttribute as CFString, on: appElement),
+              CFGetTypeID(window) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        let windowElement = unsafeBitCast(window, to: AXUIElement.self)
+        guard let frame = AXCaretHelper.rectValue(for: "AXFrame" as CFString, on: windowElement),
+              !frame.isEmpty else {
+            return nil
+        }
+        return AXCaretHelper.cocoaRect(fromAccessibilityRect: frame)
     }
 }

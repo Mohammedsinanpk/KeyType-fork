@@ -47,6 +47,17 @@ public struct FocusedFieldReader {
     /// value (likely not a text-bearing field).
     public func snapshot(of element: AXUIElement) -> FocusedFieldSnapshot? {
         let textElement = Self.textElement(for: element)
+        let target = AppTargetResolver.resolveAppTarget(for: textElement)
+        let caretGeometry = resolver.resolveCaretRect(for: textElement)
+
+        if let mailSnapshot = MailComposeTextContext.snapshot(
+            of: textElement,
+            target: target,
+            caretGeometry: caretGeometry
+        ) {
+            return mailSnapshot
+        }
+
         let rawValue = AXCaretHelper.stringValue(for: kAXValueAttribute as CFString, on: textElement) ?? ""
         let axRange = AXCaretHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: textElement)
         let selectedTextAttr = AXCaretHelper.stringValue(for: kAXSelectedTextAttribute as CFString, on: textElement)
@@ -55,9 +66,6 @@ public struct FocusedFieldReader {
         // If neither is present, fall back to whatever we can glean (still produces a
         // bundle-id-only context so the rest of the pipeline can decide).
         let split = TextCursorSplitter.split(text: rawValue, axRange: axRange)
-
-        // Caret rect (may be nil for elements without supported geometry attributes).
-        let caretGeometry = resolver.resolveCaretRect(for: textElement)
 
         // Selection: prefer the explicit AXSelectedText, fall back to the slice from the split.
         let effectiveSelected: String? = {
@@ -77,8 +85,6 @@ public struct FocusedFieldReader {
             isRightToLeft: WritingDirection.isRightToLeft(split.beforeCursor.isEmpty ? rawValue : split.beforeCursor),
             cursorRectQuality: Self.caretQuality(from: caretGeometry?.qualityLabel)
         )
-
-        let target = AppTargetResolver.resolveAppTarget(for: textElement)
 
         let placeholder = AXCaretHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: textElement)
         let labels = AppTargetResolver.collectLabels(for: textElement)
@@ -124,6 +130,7 @@ public struct FocusedFieldReader {
         let maxNodes = 240
         var visited = 0
         var seen = Set<String>()
+        var bestCandidate: (element: AXUIElement, score: Int, minY: CGFloat)?
 
         let rootIdentity = AXCaretHelper.elementIdentity(for: element)
 
@@ -134,7 +141,13 @@ public struct FocusedFieldReader {
             visited += 1
 
             if identity != rootIdentity, isUsableTextElement(candidate) {
-                return candidate
+                let score = textElementCandidateScore(candidate)
+                let minY = fieldRect(for: candidate)?.minY ?? .greatestFiniteMagnitude
+                if bestCandidate == nil
+                    || score > bestCandidate!.score
+                    || (score == bestCandidate!.score && minY < bestCandidate!.minY) {
+                    bestCandidate = (candidate, score, minY)
+                }
             }
 
             guard depth < maxDepth else { continue }
@@ -143,7 +156,7 @@ public struct FocusedFieldReader {
             }
         }
 
-        return element
+        return bestCandidate?.element ?? element
     }
 
     private static func isUsableTextElement(_ element: AXUIElement) -> Bool {
@@ -167,7 +180,47 @@ public struct FocusedFieldReader {
         return role.map(textRoles.contains) == true || subrole.map(textRoles.contains) == true
     }
 
-    private static func caretQuality(from label: String?) -> CaretGeometryQuality {
+    private static func textElementCandidateScore(_ element: AXUIElement) -> Int {
+        let role = AXCaretHelper.stringValue(for: kAXRoleAttribute as CFString, on: element) ?? ""
+        let subrole = AXCaretHelper.stringValue(for: kAXSubroleAttribute as CFString, on: element) ?? ""
+        let metadata = [
+            AXCaretHelper.stringValue(for: kAXTitleAttribute as CFString, on: element),
+            AXCaretHelper.stringValue(for: kAXDescriptionAttribute as CFString, on: element),
+            AXCaretHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: element)
+        ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+
+        var score = 0
+        if AXCaretHelper.boolValue(for: kAXFocusedAttribute as CFString, on: element) == true {
+            score += 1_000
+        }
+        if AXCaretHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element) != nil {
+            score += 300
+        }
+        if AXCaretHelper.isAttributeSettable(kAXValueAttribute as CFString, on: element) {
+            score += 120
+        }
+        if role == kAXTextAreaRole as String || role == kAXTextFieldRole as String || role == kAXComboBoxRole as String {
+            score += 100
+        }
+        if subrole == kAXTextAreaRole as String || subrole == kAXTextFieldRole as String || subrole == kAXComboBoxRole as String {
+            score += 80
+        }
+        if role == "AXEditableText" || subrole == "AXEditableText" {
+            score += 60
+        }
+        if metadata.contains("send")
+            || metadata.contains("message")
+            || metadata.contains("follow-up")
+            || metadata.contains("prompt") {
+            score += 60
+        }
+
+        return score
+    }
+
+    static func caretQuality(from label: String?) -> CaretGeometryQuality {
         switch label {
         case "exact": .exact
         case "derived": .derived

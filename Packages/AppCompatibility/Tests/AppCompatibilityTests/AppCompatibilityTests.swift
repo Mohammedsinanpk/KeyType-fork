@@ -45,6 +45,36 @@ final class AppCompatibilityTests: XCTestCase {
         XCTAssertEqual(policy.completionMode, .terminal)
     }
 
+    func testCursorUsesCodeEditorPolicy() {
+        let target = AppTarget(bundleIdentifier: "com.todesktop.230313mzl4w4u92", appName: "Cursor")
+        let context = TextFieldContext(beforeCursor: "let value = cur", target: target)
+
+        let policy = AppCompatibilityStore().policy(for: context)
+
+        XCTAssertTrue(policy.isCompletionEnabled)
+        XCTAssertTrue(policy.allowsTabAcceptance)
+        XCTAssertFalse(policy.includesEnvironmentContext)
+        XCTAssertEqual(policy.overlayPreference, .inline)
+        XCTAssertEqual(policy.completionMode, .prose)
+    }
+
+    func testWeChatUsesChatSurfacePolicy() {
+        let target = AppTarget(bundleIdentifier: "com.tencent.xinWeChat", appName: "WeChat")
+        let context = TextFieldContext(beforeCursor: "sounds good, I can", target: target)
+
+        let policy = AppCompatibilityStore().policy(for: context)
+
+        XCTAssertTrue(policy.isCompletionEnabled)
+        XCTAssertTrue(policy.allowsTabAcceptance)
+        XCTAssertEqual(policy.stringInjectionChunkSize, 8)
+        XCTAssertFalse(policy.insertionRequiresPasteAndMatchStyle)
+        XCTAssertEqual(policy.overlayPreference, .inline)
+        XCTAssertEqual(policy.completionMode, .prose)
+        XCTAssertEqual(policy.customInstructions, [
+            "Continue the current WeChat message only. Keep it short and conversational."
+        ])
+    }
+
     func testPasswordManagerBundleIsSecureExcluded() {
         let target = AppTarget(bundleIdentifier: "com.1password.1password", appName: "1Password")
         let context = TextFieldContext(beforeCursor: "sec", target: target)

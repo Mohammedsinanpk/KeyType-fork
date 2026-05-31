@@ -20,7 +20,10 @@ let package = Package(
         ),
         .testTarget(
             name: "MacContextCaptureTests",
-            dependencies: ["MacContextCapture"]
+            dependencies: [
+                "MacContextCapture",
+                .product(name: "AutocompleteCore", package: "AutocompleteCore")
+            ]
         )
     ]
 )

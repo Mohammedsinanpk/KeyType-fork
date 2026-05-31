@@ -54,6 +54,10 @@ final class CompletionController {
     /// unchanged (caret-geometry repolls) don't tear down and rebuild the overlay — that churn is
     /// what makes the ghost text flash.
     private var lastContextKey: String?
+    /// Caret rect of the last snapshot we rendered the overlay against. Scrolling moves the caret on
+    /// screen without changing the field text, so a same-text re-emit must re-pin the ghost text to
+    /// the new caret position (auto-realign) instead of leaving it stranded where it was.
+    private var lastCaretRect: CGRect?
 
     private(set) var loadState: LoadState = .idle
     private(set) var isRunning = false
@@ -196,10 +200,19 @@ final class CompletionController {
         guard !context.beforeCursor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { reset(); return }
 
-        // Skip identical re-emits — keep whatever is on screen, no flicker.
+        // Skip identical re-emits — keep whatever is on screen, no flicker. The one exception is a
+        // moved caret with unchanged text (e.g. the user scrolled the field): re-pin the visible
+        // suggestion to the new caret rather than leaving it stranded at the old screen position.
         let key = context.beforeCursor + "\u{1}" + context.afterCursor + "\u{1}" + context.target.bundleIdentifier
-        guard key != lastContextKey else { return }
+        if key == lastContextKey {
+            if visibleCandidate != nil, Self.caretMoved(from: lastCaretRect, to: caretRect) {
+                lastCaretRect = caretRect
+                renderSuggestion(for: context, style: FieldFontResolver.currentStyle())
+            }
+            return
+        }
         lastContextKey = key
+        lastCaretRect = caretRect
 
         guard placementResolver.placement(for: context) != nil else { reset(); return }
 
@@ -391,7 +404,18 @@ final class CompletionController {
         debounceTask?.cancel()
         generationTask?.cancel()
         lastContextKey = nil
+        lastCaretRect = nil
         clearCompletion()
+    }
+
+    /// Whether the caret has shifted enough to warrant re-pinning the overlay. A small epsilon
+    /// absorbs sub-pixel AX jitter so steady-state repolls don't churn the window.
+    private static func caretMoved(from old: CGRect?, to new: CGRect) -> Bool {
+        guard let old else { return true }
+        let epsilon: CGFloat = 0.5
+        return abs(old.minX - new.minX) > epsilon
+            || abs(old.minY - new.minY) > epsilon
+            || abs(old.height - new.height) > epsilon
     }
 
     // MARK: - Acceptance (driven by the Tab hotkey)

@@ -137,6 +137,7 @@ enum FieldFontResolver {
         let maxNodes = 240
         var visited = 0
         var seen = Set<String>()
+        var bestCandidate: (element: AXUIElement, score: Int, minY: CGFloat)?
 
         while !queue.isEmpty, visited < maxNodes {
             let (candidate, depth) = queue.removeFirst()
@@ -145,7 +146,15 @@ enum FieldFontResolver {
             visited += 1
 
             if identity != rootIdentity, isUsableTextElement(candidate) {
-                return candidate
+                let score = textElementCandidateScore(candidate)
+                let minY = rectValue(for: "AXFrame" as CFString, on: candidate)
+                    .map(cocoaRect(fromAccessibilityRect:))?
+                    .minY ?? .greatestFiniteMagnitude
+                if bestCandidate == nil
+                    || score > bestCandidate!.score
+                    || (score == bestCandidate!.score && minY < bestCandidate!.minY) {
+                    bestCandidate = (candidate, score, minY)
+                }
             }
 
             guard depth < maxDepth else { continue }
@@ -154,7 +163,7 @@ enum FieldFontResolver {
             }
         }
 
-        return element
+        return bestCandidate?.element ?? element
     }
 
     private static func isUsableTextElement(_ element: AXUIElement) -> Bool {
@@ -176,6 +185,46 @@ enum FieldFontResolver {
             "AXDocument"
         ]
         return role.map(textRoles.contains) == true || subrole.map(textRoles.contains) == true
+    }
+
+    private static func textElementCandidateScore(_ element: AXUIElement) -> Int {
+        let role = stringValue(for: kAXRoleAttribute as CFString, on: element) ?? ""
+        let subrole = stringValue(for: kAXSubroleAttribute as CFString, on: element) ?? ""
+        let metadata = [
+            stringValue(for: kAXTitleAttribute as CFString, on: element),
+            stringValue(for: kAXDescriptionAttribute as CFString, on: element),
+            stringValue(for: kAXPlaceholderValueAttribute as CFString, on: element)
+        ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+
+        var score = 0
+        if boolValue(for: kAXFocusedAttribute as CFString, on: element) == true {
+            score += 1_000
+        }
+        if rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element) != nil {
+            score += 300
+        }
+        if isAttributeSettable(kAXValueAttribute as CFString, on: element) {
+            score += 120
+        }
+        if role == kAXTextAreaRole as String || role == kAXTextFieldRole as String || role == kAXComboBoxRole as String {
+            score += 100
+        }
+        if subrole == kAXTextAreaRole as String || subrole == kAXTextFieldRole as String || subrole == kAXComboBoxRole as String {
+            score += 80
+        }
+        if role == "AXEditableText" || subrole == "AXEditableText" {
+            score += 60
+        }
+        if metadata.contains("send")
+            || metadata.contains("message")
+            || metadata.contains("follow-up")
+            || metadata.contains("prompt") {
+            score += 60
+        }
+
+        return score
     }
 
     private static func stringValue(for attribute: CFString, on element: AXUIElement) -> String? {
@@ -208,6 +257,52 @@ enum FieldFontResolver {
             return nil
         }
         return range
+    }
+
+    private static func boolValue(for attribute: CFString, on element: AXUIElement) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success, let value else {
+            return nil
+        }
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        return nil
+    }
+
+    private static func isAttributeSettable(_ attribute: CFString, on element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success
+            && settable.boolValue
+    }
+
+    private static func rectValue(for attribute: CFString, on element: AXUIElement) -> CGRect? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXValueGetTypeID() else {
+            return nil
+        }
+        let axValue = unsafeBitCast(value, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cgRect else {
+            return nil
+        }
+        var rect = CGRect.zero
+        guard AXValueGetValue(axValue, .cgRect, &rect) else {
+            return nil
+        }
+        return rect
+    }
+
+    private static func cocoaRect(fromAccessibilityRect rect: CGRect) -> CGRect {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(rect) }) ?? NSScreen.main else {
+            return rect
+        }
+        let displayHeight = screen.frame.height
+        return CGRect(x: rect.minX, y: displayHeight - rect.maxY, width: rect.width, height: rect.height)
     }
 
     private static func childElements(of element: AXUIElement) -> [AXUIElement] {
