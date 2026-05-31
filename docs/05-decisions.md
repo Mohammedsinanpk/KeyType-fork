@@ -1465,3 +1465,12 @@ text. Both are now closed:
     status line. The coordinator's `ImportState` therefore only carries `.idle`/`.preparing`
     (progress), keeping the logic layer free of presentation; the app activates first because it is an
     accessory (no dock icon) so the alert comes to the front.
+  - **Open panel must quiesce AX first (added 2026-05-31):** the import open panel is presented from
+    `AppDelegate.presentModelImportPanel()`, not the SwiftUI view, because it deadlocks otherwise. The
+    `NSOpenPanel` is an out-of-process remote view, and KeyType's `AccessibilityContextTracker` makes
+    *synchronous* `AXUIElementCopyAttributeValue` reads on every focus change — and the panel taking
+    focus triggers exactly that. Those reads run on the main thread, which is also what services the
+    panel, so they deadlock and the app hangs (reproduced as "hangs on the file picker"). The fix
+    stops `contextCapture` / `completion` / `historyRecorder` / `acceptance` before showing the panel,
+    presents it with `begin` (keeps the run loop turning) rather than `runModal`, and restores the
+    pipeline via `syncContextCaptureWithPermission()` in the completion handler.

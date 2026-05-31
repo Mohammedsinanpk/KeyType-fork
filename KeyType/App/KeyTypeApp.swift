@@ -43,7 +43,8 @@ struct KeyTypeApp: App {
                     appDelegate.resetOnboarding()
                     appDelegate.requestOpenOnboarding()
                 },
-                reloadModel: { appDelegate.completion.reloadModel() }
+                reloadModel: { appDelegate.completion.reloadModel() },
+                importModel: { appDelegate.presentModelImportPanel() }
             )
         }
         .windowResizability(.contentSize)

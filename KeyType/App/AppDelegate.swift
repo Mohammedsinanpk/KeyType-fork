@@ -9,6 +9,7 @@ import AppKit
 import MacContextCapture
 import Personalization
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -181,6 +182,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// Present the "Import a GGUF…" open panel and, on success, hand the chosen file to the model
+    /// setup coordinator.
+    ///
+    /// Why this lives in `AppDelegate` (and not the SwiftUI view): the open panel is hosted by an
+    /// out-of-process remote view service. KeyType's AX context tracker makes *synchronous*
+    /// `AXUIElementCopyAttributeValue` reads whenever focus changes — and the panel taking focus
+    /// fires exactly that. Those reads run on the main thread, which is also what has to service the
+    /// panel, so they deadlock and the app hangs. We therefore quiesce the whole AX/keyboard pipeline
+    /// for the panel's lifetime, then restore it (gated on AX still being granted) once it closes.
+    func presentModelImportPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "gguf")].compactMap { $0 }
+        panel.allowsOtherFileTypes = false
+        panel.prompt = "Import"
+        panel.message = "Choose a GGUF model file to import."
+
+        // Stop everything that reads AX or taps the keyboard before the panel appears.
+        contextCapture.stop()
+        completion.stop()
+        historyRecorder.stop()
+        acceptance.stop()
+
+        NSApp.activate(ignoringOtherApps: true)
+        // `begin` (not `runModal`) keeps the main run loop turning while the panel is up; combined
+        // with the paused AX pipeline this is what stops the hang.
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            self.syncContextCaptureWithPermission()
+            guard response == .OK, let url = panel.url else { return }
+            self.modelSetup.importModel(from: url)
+        }
     }
 
     func requestOpenOnboarding() {

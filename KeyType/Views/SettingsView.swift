@@ -16,7 +16,6 @@ import ModelManagement
 import ModelRuntime
 import Personalization
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SettingsView: View {
     let settings: SettingsStore
@@ -27,6 +26,9 @@ struct SettingsView: View {
     /// Tear down and reload the completion engine from the currently selected model. Invoked when the
     /// user picks a different installed model so the change takes effect immediately (see ADR-021).
     let reloadModel: () -> Void
+    /// Present the GGUF import open panel. Owned by `AppDelegate` because it must quiesce the AX
+    /// pipeline around the panel to avoid a main-thread deadlock (see `presentModelImportPanel`).
+    let importModel: () -> Void
 
     @State private var selection: SettingsCategory = .general
     @State private var snapshot: TelemetrySnapshot = TelemetrySnapshot()
@@ -154,30 +156,6 @@ struct SettingsView: View {
                 ProgressView().controlSize(.small)
                 Text("Preparing \(filename)…").font(.footnote).foregroundStyle(.secondary)
             }
-        }
-    }
-
-    /// Let the user pick a GGUF from anywhere on disk; `ModelSetupCoordinator` copies it into the
-    /// Models directory, builds its profile, and (on success) selects it. App Sandbox is disabled
-    /// (see entitlements), so the chosen file is directly readable without a security-scoped bookmark.
-    ///
-    /// KeyType is an accessory app (no dock icon, `.accessory` activation policy). A synchronous
-    /// `NSOpenPanel.runModal()` spins a nested modal run loop, but the panel can't become key while
-    /// the app is inactive — so the loop never returns and the app appears to hang. We activate the
-    /// app first and present the panel asynchronously via `begin`, which doesn't block the run loop.
-    private func importModel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "gguf")].compactMap { $0 }
-        panel.allowsOtherFileTypes = false
-        panel.prompt = "Import"
-        panel.message = "Choose a GGUF model file to import."
-        NSApp.activate(ignoringOtherApps: true)
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            modelSetup.importModel(from: url)
         }
     }
 
