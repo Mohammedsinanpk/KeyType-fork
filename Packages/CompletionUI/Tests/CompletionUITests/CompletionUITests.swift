@@ -41,7 +41,7 @@ final class CompletionUITests: XCTestCase {
         XCTAssertEqual(placement?.verticalOffset, 3)
     }
 
-    func testPlacementUsesMirrorForEstimatedWebCaret() {
+    func testPlacementKeepsEstimatedWebCaretInline() {
         let resolver = OverlayPlacementResolver(compatibilityStore: AppCompatibilityStore(overrides: []))
         let rect = CGRect(x: 10, y: 20, width: 1, height: 16)
         let context = TextFieldContext(
@@ -51,7 +51,7 @@ final class CompletionUITests: XCTestCase {
             traits: TextFieldTraits(isWebField: true)
         )
 
-        XCTAssertEqual(resolver.placement(for: context)?.mode, .mirror)
+        XCTAssertEqual(resolver.placement(for: context)?.mode, .inline)
     }
 
     func testPlacementNilForHiddenOverlayPolicy() {
@@ -74,6 +74,27 @@ final class CompletionUITests: XCTestCase {
 
         presenter.hide()
         XCTAssertNil(presenter.visibleCandidate)
+    }
+
+    @MainActor
+    func testGhostTextColorFallsBackFromNearWhiteAXColor() {
+        let resolved = GhostTextView.visibleGhostColor(from: NSColor(calibratedWhite: 0.98, alpha: 1))
+            .usingColorSpace(.sRGB)
+
+        XCTAssertNotNil(resolved)
+        XCTAssertLessThan(resolved?.redComponent ?? 1, 0.5)
+        XCTAssertGreaterThan(resolved?.alphaComponent ?? 0, 0.8)
+    }
+
+    @MainActor
+    func testGhostTextColorKeepsReadableGrayWhenAXColorIsMissing() {
+        let resolved = GhostTextView.visibleGhostColor(from: nil)
+            .usingColorSpace(.sRGB)
+
+        XCTAssertNotNil(resolved)
+        XCTAssertGreaterThan(resolved?.redComponent ?? 0, 0.35)
+        XCTAssertLessThan(resolved?.redComponent ?? 1, 0.55)
+        XCTAssertGreaterThan(resolved?.alphaComponent ?? 0, 0.8)
     }
 
     @MainActor

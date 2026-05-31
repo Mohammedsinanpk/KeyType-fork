@@ -18,6 +18,7 @@ import LlamaModelRuntime
 import MacContextCapture
 import ModelRuntime
 import Observation
+import Personalization
 import Prompting
 import TextInsertion
 import TokenProfiles
@@ -35,6 +36,9 @@ final class CompletionController {
 
     private let tracker: AccessibilityContextTracker
     private let compatibilityStore: AppCompatibilityStore
+    private let settings: SettingsStore
+    private let history: WritingHistoryStoring
+    private let telemetry: CompletionTelemetryStore
     private let presenter: InlineGhostTextPresenter
     private let placementResolver: OverlayPlacementResolver
     private let inserter: PasteboardCompletionInserter
@@ -68,6 +72,11 @@ final class CompletionController {
     private var anchorContext: TextFieldContext?
     /// The most recent focused-field context seen — the live caret the suggestion is reconciled to.
     private var latestContext: TextFieldContext?
+    /// Set when the user accepts a word with Tab: keep the *rest* of the same suggestion in place and
+    /// do not regenerate, so repeated Tab presses walk through the remaining words of that one
+    /// completion. Cleared once the suggestion is exhausted, the user diverges, or the overlay is torn
+    /// down — at which point normal per-keystroke generation resumes.
+    private var holdAnchor = false
 
     var completionsEnabled = true {
         didSet {
@@ -77,18 +86,30 @@ final class CompletionController {
 
     init(
         tracker: AccessibilityContextTracker,
+        settings: SettingsStore,
+        history: WritingHistoryStoring = NullWritingHistoryStore(),
+        telemetry: CompletionTelemetryStore = CompletionTelemetryStore(url: nil),
         compatibilityStore: AppCompatibilityStore = KeyTypeModuleGraph.makeCompatibilityStore()
     ) {
         self.tracker = tracker
+        self.settings = settings
+        self.history = history
+        self.telemetry = telemetry
         self.compatibilityStore = compatibilityStore
         self.presenter = InlineGhostTextPresenter()
         self.placementResolver = OverlayPlacementResolver(compatibilityStore: compatibilityStore)
         self.inserter = PasteboardCompletionInserter(
             planner: InsertionPlanner(compatibilityStore: compatibilityStore)
         )
-        // The live typo defence is the in-beam guard (ADR-015); the output filter's typo net stays
-        // inert here to avoid double spell-checking. All other taxonomy reasons are enforced.
-        self.filter = DefaultCandidateFilter(compatibilityStore: compatibilityStore)
+        // The in-beam guard (ADR-015) remains the primary typo defence, but it judges *healed,
+        // pre-reconciliation* token paths — not the finalised string that is actually shown. Wiring
+        // the synchronous recogniser into the output filter adds a cheap deterministic re-check of
+        // the candidate as displayed (defense-in-depth on the real output). The check only runs on a
+        // *closed* current word and is conservative, so it can't false-positive. See ADR-024.
+        self.filter = DefaultCandidateFilter(
+            compatibilityStore: compatibilityStore,
+            wordRecognizer: SystemWordRecognizer()
+        )
     }
 
     // MARK: - Lifecycle
@@ -97,9 +118,17 @@ final class CompletionController {
     func loadIfNeeded() {
         guard loadState == .idle else { return }
         loadState = .loading
+        // Tune the decoder from accumulated local telemetry (bounded nudges) and honor the chosen
+        // model. Both are read now, on the main actor, before suspending into the off-main load.
+        let adjustments = ThresholdTuner.adjustments(for: telemetry.snapshot())
+        let modelFilename = settings.selectedModelFilename ?? ModelContainer.defaultModelFilename
         Task {
             do {
-                let engine = try await Self.buildEngine(compatibilityStore: compatibilityStore)
+                let engine = try await Self.buildEngine(
+                    compatibilityStore: compatibilityStore,
+                    modelFilename: modelFilename,
+                    adjustments: adjustments
+                )
                 self.engine = engine
                 self.loadState = .ready
                 self.log.info("Completion engine ready")
@@ -154,6 +183,9 @@ final class CompletionController {
         latestContext = context
         let policy = compatibilityStore.policy(for: context)
         guard policy.isCompletionEnabled,
+              // Live per-app disable from Settings (reflects runtime toggles without rebuilding the
+              // compatibility store). See ADR-023.
+              !settings.perAppDisabled.contains(context.target.bundleIdentifier),
               policy.allowsMidLineCompletion || context.afterCursor.isEmpty,
               policy.allowsTabAcceptance
         else { reset(); return }
@@ -181,6 +213,17 @@ final class CompletionController {
         // dropped immediately — never left dangling and stale. A fresh generation follows below.
         renderSuggestion(for: context, style: style)
 
+        // Holding an accepted suggestion: while its remainder still applies to the live caret, keep it
+        // on screen and skip regeneration so repeated Tab presses accept subsequent words of the SAME
+        // completion (rather than producing a fresh one after each word). Once the remainder is
+        // exhausted or the user diverges, fall through to a fresh generation below.
+        if holdAnchor {
+            if let remaining = liveCompletion(for: context), !remaining.isEmpty {
+                return
+            }
+            holdAnchor = false
+        }
+
         // Token healing (ADR-019): when the caret sits mid-word, prompt from the last clean token
         // boundary and constrain regeneration to the already-typed bytes, so the model can reach
         // the natural whole-word token (" great") instead of being stuck in a subword state where a
@@ -188,18 +231,34 @@ final class CompletionController {
         // `present`. When there is no heal the request is the plain whole-prefix continuation.
         let heal = MidWordHealing.plan(for: context)
         let promptContext = heal.map { context.replacingBeforeCursor($0.head) } ?? context
-        let promptResult = KeyTypeModuleGraph.makePrompt(for: promptContext, compatibilityStore: compatibilityStore)
+        // Personalization + clipboard are opt-in: only feed history when the user enabled it, and
+        // only include clipboard text when that privacy switch is on. OCR/screen is a future source.
+        let historyProvider: WritingHistoryProviding = settings.historyEnabled
+            ? history
+            : NullWritingHistoryStore()
+        let clipboardText = settings.clipboardEnabled
+            ? NSPasteboard.general.string(forType: .string)
+            : nil
+        let promptResult = KeyTypeModuleGraph.makePrompt(
+            for: promptContext,
+            compatibilityStore: compatibilityStore,
+            history: historyProvider,
+            pasteboardText: clipboardText
+        )
         let requiredPrefixBytes = heal.map { Array($0.heal.utf8) } ?? []
         // The re-emitted stem consumes part of the token/width budget, so widen both by the heal's
         // length to preserve the continuation's allowance.
         let healSlack = heal?.heal.count ?? 0
+        // Completion length is user-configurable (Settings) and maps to the decoder's token/width
+        // budget; token healing widens it at runtime as before.
+        let length = settings.completionLength
         let request = CompletionRequest(
             context: context,
             prompt: promptResult.prompt,
             requiredPrefixBytes: requiredPrefixBytes,
             mode: policy.completionMode,
-            maxCompletionTokens: 4 + (healSlack > 0 ? 2 : 0),
-            maxDisplayWidth: 60 + healSlack
+            maxCompletionTokens: length.maxCompletionTokens + (healSlack > 0 ? 2 : 0),
+            maxDisplayWidth: length.maxDisplayWidth + healSlack
         )
 
         // Debounce: coalesce rapid keystrokes, and DON'T hide the current ghost up front — we
@@ -213,8 +272,11 @@ final class CompletionController {
             self.generationTask = Task { [weak self] in
                 guard let self else { return }
                 do {
+                    let start = DispatchTime.now()
                     let candidates = try await engine.completions(for: request)
                     try Task.checkCancellation()
+                    let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+                    self.telemetry.recordLatency(milliseconds: elapsedMs)
                     self.present(candidates, request: request, style: style)
                 } catch is CancellationError {
                     // Superseded by a newer keystroke — leave the current ghost as-is.
@@ -236,11 +298,13 @@ final class CompletionController {
             .joined(separator: " | ")
 
         guard let best = candidates.first else {
+            telemetry.recordSuppressed(reason: "noCandidate")
             predictionLog.append("PREDICT ctx=\"\(ctx)\" → SUPPRESS(noCandidate)")
             clearCompletion()
             return
         }
         if let reason = filter.suppressionReason(for: best, request: request) {
+            telemetry.recordSuppressed(reason: String(describing: reason))
             log.debug("Suppressed: \(String(describing: reason), privacy: .public)")
             predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SUPPRESS(\(reason))")
             clearCompletion()
@@ -257,8 +321,15 @@ final class CompletionController {
         // CaretBoundary). This reconciled text is the suggestion *anchor*; what is actually shown and
         // inserted is re-derived from it against the live caret, so it stays correct even though the
         // user may have typed more during generation.
-        let anchored = CaretBoundary.reconcile(completion, beforeCursor: request.context.beforeCursor)
+        var anchored = CaretBoundary.reconcile(completion, beforeCursor: request.context.beforeCursor)
+        // Drop trailing whitespace for an end-of-line append: a dangling space renders as a phantom
+        // gap in the ghost text and inserts a stray separator on accept. Mid-line keeps it — there the
+        // trailing space may be the genuine separator before the existing after-cursor text. See ADR-024.
+        if request.context.afterCursor.isEmpty {
+            while let last = anchored.last, last.isWhitespace { anchored.removeLast() }
+        }
         guard !anchored.isEmpty else {
+            telemetry.recordSuppressed(reason: "emptyAfterBoundary")
             predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SUPPRESS(emptyAfterBoundary)")
             clearCompletion()
             return
@@ -266,22 +337,36 @@ final class CompletionController {
 
         anchorText = anchored
         anchorContext = request.context
+        telemetry.recordShown()
         predictionLog.append("PREDICT ctx=\"\(ctx)\" [\(ranked)] → SHOWN \"\(PredictionLog.escape(anchored))\"")
-        renderSuggestion(for: latestContext ?? request.context, style: style)
+        if !renderSuggestion(for: latestContext ?? request.context, style: style, clearOnFailure: false) {
+            _ = renderSuggestion(for: request.context, style: style)
+        }
     }
 
     /// Renders the anchored suggestion (if any) against `live`: shows the portion still ahead of the
     /// caret at the live placement, or clears everything when the user has typed past / diverged from
     /// it. The single place the overlay is shown, so display always matches the live caret.
-    private func renderSuggestion(for live: TextFieldContext, style: ResolvedFieldStyle) {
+    @discardableResult
+    private func renderSuggestion(
+        for live: TextFieldContext,
+        style: ResolvedFieldStyle,
+        clearOnFailure: Bool = true
+    ) -> Bool {
         guard let shown = liveCompletion(for: live), !shown.isEmpty,
               let placement = placementResolver.placement(for: live) else {
-            clearCompletion()
-            return
+            if clearOnFailure {
+                clearCompletion()
+            }
+            return false
         }
         let candidate = CompletionCandidate(text: shown, mode: .prose)
         visibleCandidate = candidate
+        predictionLog.append(
+            "PLACE mode=\(placement.mode) cursor=\(PredictionLog.rect(placement.cursorRect)) field=\(placement.fieldRect.map(PredictionLog.rect) ?? "nil")"
+        )
         presenter.show(candidate: candidate, placement: placement, font: style.font, textColor: style.color)
+        return true
     }
 
     /// The portion of the anchored completion still ahead of the live caret, or `nil` when the
@@ -298,6 +383,7 @@ final class CompletionController {
         visibleCandidate = nil
         anchorText = nil
         anchorContext = nil
+        holdAnchor = false
     }
 
     /// Hide any ghost text and forget the last context, so the next snapshot is treated as new.
@@ -316,20 +402,34 @@ final class CompletionController {
         return compatibilityStore.policy(for: context).allowsTabAcceptance
     }
 
-    /// Tab: insert the next word of the suggestion. The induced text change regenerates a fresh
-    /// completion from the new cursor position.
+    /// Tab: insert the next word of the suggestion and keep the *rest* of the same completion in place
+    /// so the user can keep pressing Tab to accept subsequent words. We do **not** regenerate: the
+    /// anchor stays put, the insertion-induced snapshot re-derives the shrinking remainder, and
+    /// `holdAnchor` suppresses a fresh generation until the suggestion is exhausted or the user
+    /// diverges. The live caret is advanced optimistically by the inserted word so a rapid second Tab
+    /// accepts the *next* word instead of re-inserting this one before the AX snapshot lands.
     func acceptNextWord() {
         guard canAcceptCompletion, let (text, context) = insertionText() else { return }
-        let (head, _) = NextWordSplitter.split(text)
+        let (head, rest) = NextWordSplitter.split(text)
+        guard !head.isEmpty else { return }
+        telemetry.recordAccepted()
         predictionLog.append(
             "ACCEPT(word) \"\(PredictionLog.escape(head))\" of \"\(PredictionLog.escape(text))\""
         )
-        insert(text: head, context: context)
+
+        holdAnchor = true
+        // Cancel any in-flight generation so it can't clobber the held suggestion when it returns.
+        debounceTask?.cancel()
+        generationTask?.cancel()
+        latestContext = context.replacingBeforeCursor(context.beforeCursor + head)
+        visibleCandidate = rest.isEmpty ? nil : CompletionCandidate(text: rest, mode: .prose)
+        insert(text: head, context: context, keepingAnchor: true)
     }
 
     /// Shift+Tab: insert the whole suggestion.
     func acceptFullCompletion() {
         guard canAcceptCompletion, let (text, context) = insertionText() else { return }
+        telemetry.recordAccepted()
         predictionLog.append("ACCEPT(full) \"\(PredictionLog.escape(text))\"")
         insert(text: text, context: context)
     }
@@ -344,12 +444,18 @@ final class CompletionController {
         return (text, live)
     }
 
-    private func insert(text: String, context: TextFieldContext) {
+    /// Inserts `text` at the caret. By default (full-completion accept, or the final word) it drops
+    /// the dedupe key and tears down the suggestion so the post-insertion snapshot regenerates fresh.
+    /// When `keepingAnchor` is true (Tab word-acceptance with more words remaining) the anchor and
+    /// overlay are left intact so the induced snapshot re-renders the shrinking remainder instead.
+    private func insert(text: String, context: TextFieldContext, keepingAnchor: Bool = false) {
         guard !text.isEmpty else { return }
         let plan = inserter.planInsertion(candidate: CompletionCandidate(text: text), context: context)
-        // Drop the dedupe key so the post-insertion snapshot always regenerates a fresh suggestion.
-        lastContextKey = nil
-        clearCompletion()
+        if !keepingAnchor {
+            // Drop the dedupe key so the post-insertion snapshot always regenerates a fresh suggestion.
+            lastContextKey = nil
+            clearCompletion()
+        }
         Task {
             do {
                 try await inserter.insert(plan: plan)
@@ -366,27 +472,39 @@ final class CompletionController {
     /// UI. Inlined here — rather than via `KeyTypeModuleGraph`, whose helpers are main-actor
     /// isolated by default — so every step stays off main.
     nonisolated private static func buildEngine(
-        compatibilityStore: AppCompatibilityStore
+        compatibilityStore: AppCompatibilityStore,
+        modelFilename: String,
+        adjustments: ThresholdAdjustments
     ) async throws -> ConstrainedGenerationEngine {
         let family = "qwen3-v151936"
-        guard ModelContainer.defaultModelExists() else {
-            throw CompletionLoadError.modelMissing(ModelContainer.defaultModelFilename)
+        let modelURL = try ModelContainer.modelURL(filename: modelFilename)
+        guard ModelContainer.modelExists(at: modelURL) else {
+            throw CompletionLoadError.modelMissing(modelFilename)
         }
-        let runtime = try LlamaModelRuntime(modelURL: try ModelContainer.modelURL())
+        let runtime = try LlamaModelRuntime(modelURL: modelURL)
         let profile = try MmapAutocompleteProfile.open(
             at: try ModelContainer.profileURL(family: family),
             tokenizerVocabSize: runtime.metadata.vocabularySize,
             tokenizerBytes: { try runtime.tokenizer.rawBytes(for: $0) },
             expectedModelFamily: family
         )
+        // Apply the telemetry-derived nudges to the decoder defaults: a larger relative cutoff keeps
+        // more branches alive (fewer suppressions), a lower probability floor admits weaker-but-valid
+        // continuations. Bounds are clamped inside `ThresholdTuner`. See ADR-023.
+        let base = DecodingConfiguration(enableFillInMiddle: true)
+        let configuration = DecodingConfiguration(
+            relativeCutoff: base.relativeCutoff + adjustments.relativeCutoffDelta,
+            minBranchProbability: base.minBranchProbability * adjustments.minBranchProbabilityScale,
+            // Native fill-in-the-middle for mid-line completion (the on-device probe confirmed it
+            // beats base continuation, which collides with the after-cursor text). Falls back to
+            // base continuation when there is no suffix or the model lacks FIM tokens. See ADR-017.
+            enableFillInMiddle: true
+        )
         return ConstrainedGenerationEngine(
             runtime: runtime,
             profile: profile,
             compatibilityStore: compatibilityStore,
-            // Native fill-in-the-middle for mid-line completion (the on-device probe confirmed it
-            // beats base continuation, which collides with the after-cursor text). Falls back to
-            // base continuation when there is no suffix or the model lacks FIM tokens. See ADR-017.
-            configuration: DecodingConfiguration(enableFillInMiddle: true),
+            configuration: configuration,
             wordRecognizer: SystemWordRecognizer()
         )
     }

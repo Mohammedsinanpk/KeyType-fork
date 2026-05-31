@@ -155,12 +155,8 @@ public struct AXCaretGeometryResolver {
            let anchorFrame,
            anchorFrame.width > 10,
            anchorFrame.height > 0 {
-            let x = min(
-                conservativeEstimatedCaretX(in: anchorFrame, text: textValue, selection: selection),
-                anchorFrame.maxX
-            )
             return AXCaretGeometryResult(
-                rect: CGRect(x: x, y: anchorFrame.minY, width: 2, height: min(anchorFrame.height, 24)),
+                rect: conservativeEstimatedCaretRect(in: anchorFrame, text: textValue, selection: selection),
                 source: "AXFrameEstimate",
                 quality: .estimated
             )
@@ -339,10 +335,7 @@ public struct AXCaretGeometryResolver {
         text: String,
         selection: NSRange
     ) -> CGFloat {
-        let nsText = text as NSString
-        let safeLocation = min(selection.location, nsText.length)
-        let prefix = nsText.substring(to: safeLocation)
-        let currentLinePrefix = prefix.components(separatedBy: .newlines).last ?? prefix
+        let currentLinePrefix = currentLinePrefix(in: text, selection: selection)
         let line = currentLinePrefix as NSString
 
         let estimatedWidthBias: CGFloat = 1.1
@@ -353,6 +346,41 @@ public struct AXCaretGeometryResolver {
         let estimatedWidth = min(measuredWidth, CGFloat(line.length) * perCharacterCeiling)
 
         return cocoaRect.minX + estimatedWidth
+    }
+
+    private func conservativeEstimatedCaretRect(
+        in cocoaRect: CGRect,
+        text: String,
+        selection: NSRange
+    ) -> CGRect {
+        let lineHeight = min(max(NSFont.systemFont(ofSize: 15).boundingRectForFont.height, 18), 24)
+        let height = min(cocoaRect.height, lineHeight)
+        let x = min(conservativeEstimatedCaretX(in: cocoaRect, text: text, selection: selection), cocoaRect.maxX)
+
+        guard cocoaRect.height > lineHeight * 2 else {
+            return CGRect(x: x, y: cocoaRect.minY, width: 2, height: height)
+        }
+
+        let lineIndex = CGFloat(currentLineIndex(in: text, selection: selection))
+        let topPadding: CGFloat = 2
+        let estimatedY = cocoaRect.maxY - topPadding - ((lineIndex + 1) * lineHeight)
+        let clampedY = min(max(estimatedY, cocoaRect.minY), cocoaRect.maxY - height)
+
+        return CGRect(x: x, y: clampedY, width: 2, height: height)
+    }
+
+    private func currentLinePrefix(in text: String, selection: NSRange) -> String {
+        let nsText = text as NSString
+        let safeLocation = min(selection.location, nsText.length)
+        let prefix = nsText.substring(to: safeLocation)
+        return prefix.components(separatedBy: .newlines).last ?? prefix
+    }
+
+    private func currentLineIndex(in text: String, selection: NSRange) -> Int {
+        let nsText = text as NSString
+        let safeLocation = min(selection.location, nsText.length)
+        let prefix = nsText.substring(to: safeLocation)
+        return max(0, prefix.components(separatedBy: .newlines).count - 1)
     }
 
     private func rectIsNearAnchor(_ cocoaRect: CGRect, anchor: CGRect?) -> Bool {

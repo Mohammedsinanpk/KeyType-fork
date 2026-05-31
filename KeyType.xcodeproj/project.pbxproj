@@ -33,6 +33,10 @@
 		4B5450012FC9600000000045 /* FieldFontResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000044 /* FieldFontResolver.swift */; };
 		4B5450012FC9600000000047 /* SystemWordRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000046 /* SystemWordRecognizer.swift */; };
 		4B5450012FC9600000000055 /* PredictionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000054 /* PredictionLog.swift */; };
+		4B5450012FC9600000000062 /* Personalization in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000061 /* Personalization */; };
+		4B5450012FC9600000000064 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000063 /* SettingsStore.swift */; };
+		4B5450012FC9600000000066 /* WritingHistoryRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */; };
+		4B5450012FC9600000000068 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000067 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +76,9 @@
 		4B5450012FC9600000000044 /* FieldFontResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldFontResolver.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000046 /* SystemWordRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemWordRecognizer.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000054 /* PredictionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionLog.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000063 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingHistoryRecorder.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000067 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000049 /* KeyType.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KeyType.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -87,6 +94,7 @@
 				4B5450012FC9600000000051 /* LlamaModelRuntime in Frameworks */,
 				4B5450012FC9600000000002 /* MacContextCapture in Frameworks */,
 				4B5450012FC9600000000004 /* ModelRuntime in Frameworks */,
+				4B5450012FC9600000000062 /* Personalization in Frameworks */,
 				4B5450012FC9600000000003 /* Prompting in Frameworks */,
 				4B5450012FC9600000000008 /* TextInsertion in Frameworks */,
 				4B5450012FC9600000000005 /* TokenProfiles in Frameworks */,
@@ -144,6 +152,9 @@
 				4B5450012FC9600000000044 /* FieldFontResolver.swift */,
 				4B5450012FC9600000000046 /* SystemWordRecognizer.swift */,
 				4B5450012FC9600000000054 /* PredictionLog.swift */,
+				4B5450012FC9600000000063 /* SettingsStore.swift */,
+				4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */,
+				4B5450012FC9600000000067 /* SettingsView.swift */,
 				4B5450012FC960000000000B /* KeyTypeModuleGraph.swift */,
 				4B5450012FC9600000000049 /* KeyType.entitlements */,
 				20DD9A7A2FC95AB900BE1F8C /* Assets.xcassets */,
@@ -192,6 +203,7 @@
 				4B5450012FC9600000000050 /* LlamaModelRuntime */,
 				4B5450012FC9600000000012 /* MacContextCapture */,
 				4B5450012FC9600000000014 /* ModelRuntime */,
+				4B5450012FC9600000000061 /* Personalization */,
 				4B5450012FC9600000000013 /* Prompting */,
 				4B5450012FC9600000000018 /* TextInsertion */,
 				4B5450012FC9600000000015 /* TokenProfiles */,
@@ -279,6 +291,7 @@
 				4B5450012FC9600000000024 /* XCLocalSwiftPackageReference "Packages/ConstrainedGeneration" */,
 				4B5450012FC9600000000020 /* XCLocalSwiftPackageReference "Packages/MacContextCapture" */,
 				4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */,
+				4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */,
 				4B5450012FC9600000000021 /* XCLocalSwiftPackageReference "Packages/Prompting" */,
 				4B5450012FC9600000000026 /* XCLocalSwiftPackageReference "Packages/TextInsertion" */,
 				4B5450012FC9600000000023 /* XCLocalSwiftPackageReference "Packages/TokenProfiles" */,
@@ -335,6 +348,9 @@
 				4B5450012FC9600000000045 /* FieldFontResolver.swift in Sources */,
 				4B5450012FC9600000000047 /* SystemWordRecognizer.swift in Sources */,
 				4B5450012FC9600000000055 /* PredictionLog.swift in Sources */,
+				4B5450012FC9600000000064 /* SettingsStore.swift in Sources */,
+				4B5450012FC9600000000066 /* WritingHistoryRecorder.swift in Sources */,
+				4B5450012FC9600000000068 /* SettingsView.swift in Sources */,
 				4B5450012FC960000000000A /* KeyTypeModuleGraph.swift in Sources */,
 				20DD9A822FC95AB900BE1F8C /* KeyTypeApp.swift in Sources */,
 			);
@@ -703,6 +719,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ModelRuntime;
 		};
+		4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Personalization;
+		};
 		4B5450012FC9600000000023 /* XCLocalSwiftPackageReference "Packages/TokenProfiles" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TokenProfiles;
@@ -745,6 +765,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */;
 			productName = ModelRuntime;
+		};
+		4B5450012FC9600000000061 /* Personalization */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */;
+			productName = Personalization;
 		};
 		4B5450012FC9600000000050 /* LlamaModelRuntime */ = {
 			isa = XCSwiftPackageProductDependency;

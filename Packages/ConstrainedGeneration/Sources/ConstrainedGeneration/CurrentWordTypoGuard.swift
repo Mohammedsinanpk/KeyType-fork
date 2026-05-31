@@ -34,6 +34,12 @@ final class CurrentWordTypoGuard {
     private let enabled: Bool
     private let stem: String
     private let contextWords: Set<String>
+    /// The mid-word healing stem the completion re-emits (ADR-019): the leading whitespace + the
+    /// partial word the user already typed (e.g. `" coll"`). Empty when the request isn't healed.
+    /// Stripped off a branch's text before word reconstruction so the guard sees the genuinely-new
+    /// continuation — without this the branch text starts with the heal's leading space, its
+    /// `leadingWord` is empty, and the guard never judges the word (ADR-025 follow-up).
+    private let heal: String
     private var cache: [String: Bool] = [:]
 
     init(recognizer: WordRecognizing?, request: CompletionRequest) {
@@ -45,6 +51,7 @@ final class CurrentWordTypoGuard {
         self.stem = Self.trailingWord(of: request.context.beforeCursor)
         self.contextWords = Self.words(in: request.context.beforeCursor)
             .union(Self.words(in: request.context.afterCursor))
+        self.heal = String(decoding: request.requiredPrefixBytes, as: UTF8.self)
     }
 
     /// Cheap gate the engine checks before doing any per-extension work.
@@ -65,10 +72,22 @@ final class CurrentWordTypoGuard {
     /// The completed current word if (and only if) the current word was open in `parentText` and is
     /// closed in `childText` with at least one model-contributed letter; otherwise `nil`.
     func currentWordJustClosed(parentText: String, childText: String) -> String? {
-        guard !isClosed(parentText), isClosed(childText) else { return nil }
-        let lead = Self.leadingWord(of: childText)
+        // For a healed request the branch text re-emits the typed stem (`" coll…"`); strip it so the
+        // reconstruction below works on the genuinely-new continuation rather than a leading space.
+        let parent = strippingHeal(parentText)
+        let child = strippingHeal(childText)
+        guard !isClosed(parent), isClosed(child) else { return nil }
+        let lead = Self.leadingWord(of: child)
         guard !lead.isEmpty else { return nil } // completion started with a boundary → not our word
         return stem + lead
+    }
+
+    /// Drops the healing stem from a branch's text. A no-op when the request isn't healed or the
+    /// branch hasn't yet emitted the whole stem (`strip` returns the text unchanged unless it has the
+    /// full `heal` prefix), in which case the unstripped text still starts with the heal's leading
+    /// space and is safely treated as "not our word" by the empty-`leadingWord` guard above.
+    private func strippingHeal(_ text: String) -> String {
+        heal.isEmpty ? text : MidWordHealing.strip(text, heal: heal)
     }
 
     /// A current word is "closed" once a boundary character follows its leading run of word chars.

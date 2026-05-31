@@ -38,6 +38,12 @@ struct MenuBarView: View {
             }
             .keyboardShortcut("o")
 
+            Button("KeyType Settings…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: AppDelegate.settingsWindowID)
+            }
+            .keyboardShortcut(",")
+
             Divider()
 
             Button("Quit KeyType") {

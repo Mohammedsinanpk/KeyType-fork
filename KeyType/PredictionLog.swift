@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import CoreGraphics
 import os
 
 @MainActor
@@ -74,5 +75,9 @@ final class PredictionLog {
 
     static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    static func rect(_ rect: CGRect) -> String {
+        "(\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height)))"
     }
 }

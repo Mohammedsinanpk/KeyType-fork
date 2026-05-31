@@ -48,7 +48,7 @@ enum FieldFontResolver {
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let element = focused, CFGetTypeID(element) == AXUIElementGetTypeID()
         else { return nil }
-        let field = element as! AXUIElement
+        let field = textElement(for: element as! AXUIElement)
 
         guard var probe = probeRange(for: field) else { return nil }
 
@@ -122,5 +122,111 @@ enum FieldFontResolver {
             return CFRange(location: selected.location - 1, length: 1)
         }
         return CFRange(location: 0, length: 1)
+    }
+
+    /// Browser accessibility trees often focus the page web area while the active editable element
+    /// is a child. Probe style from the same child text control that context capture will read.
+    private static func textElement(for element: AXUIElement) -> AXUIElement {
+        if isUsableTextElement(element) {
+            return element
+        }
+
+        var queue: [(element: AXUIElement, depth: Int)] = [(element, 0)]
+        let rootIdentity = elementIdentity(for: element)
+        let maxDepth = 8
+        let maxNodes = 240
+        var visited = 0
+        var seen = Set<String>()
+
+        while !queue.isEmpty, visited < maxNodes {
+            let (candidate, depth) = queue.removeFirst()
+            let identity = elementIdentity(for: candidate)
+            guard seen.insert(identity).inserted else { continue }
+            visited += 1
+
+            if identity != rootIdentity, isUsableTextElement(candidate) {
+                return candidate
+            }
+
+            guard depth < maxDepth else { continue }
+            for child in childElements(of: candidate) {
+                queue.append((child, depth + 1))
+            }
+        }
+
+        return element
+    }
+
+    private static func isUsableTextElement(_ element: AXUIElement) -> Bool {
+        guard isTextRole(element) else { return false }
+        if rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element) != nil {
+            return true
+        }
+        return stringValue(for: kAXValueAttribute as CFString, on: element) != nil
+    }
+
+    private static func isTextRole(_ element: AXUIElement) -> Bool {
+        let role = stringValue(for: kAXRoleAttribute as CFString, on: element)
+        let subrole = stringValue(for: kAXSubroleAttribute as CFString, on: element)
+        let textRoles: Set<String> = [
+            kAXTextAreaRole as String,
+            kAXTextFieldRole as String,
+            kAXComboBoxRole as String,
+            "AXEditableText",
+            "AXDocument"
+        ]
+        return role.map(textRoles.contains) == true || subrole.map(textRoles.contains) == true
+    }
+
+    private static func stringValue(for attribute: CFString, on element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success, let value else {
+            return nil
+        }
+        if let string = value as? String {
+            return string
+        }
+        if let attributed = value as? NSAttributedString {
+            return attributed.string
+        }
+        return nil
+    }
+
+    private static func rangeValue(for attribute: CFString, on element: AXUIElement) -> CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXValueGetTypeID() else {
+            return nil
+        }
+        let axValue = unsafeBitCast(value, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cfRange else {
+            return nil
+        }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range) else {
+            return nil
+        }
+        return range
+    }
+
+    private static func childElements(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let values = value as? [AnyObject] else {
+            return []
+        }
+        return values.compactMap { value in
+            guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
+                return nil
+            }
+            return unsafeBitCast(value, to: AXUIElement.self)
+        }
+    }
+
+    private static func elementIdentity(for element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        return "\(pid)-\(CFHash(element))"
     }
 }

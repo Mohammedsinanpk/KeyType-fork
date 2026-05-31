@@ -199,6 +199,37 @@ final class ConstrainedGenerationEngineTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.text), ["best"])
     }
 
+    /// Regression for ADR-025: the admissible required-prefix token must survive even when it ranks
+    /// *below* the sampler's raw-logit pre-selection cutoff (256 tokens). This is the mid-word
+    /// token-healing case (ADR-019) where the forced continuation is locally improbable — before the
+    /// fix the pre-selection masked the only admissible token out and the engine returned nothing
+    /// (`noCandidate`), which is the "easy word, no completion" symptom seen in the prediction log.
+    func testRequiredPrefixSurvivesBelowPreselectionCutoff() async throws {
+        // One admissible token ("zo", satisfies prefix "z") with a *low* logit, plus 272 inadmissible
+        // higher-logit filler tokens — more than the 256-token raw-logit pre-selection window, so the
+        // target is pushed out of it.
+        var records: [TokenProfileRecord] = [record(1, "zo")]
+        var rootLogits: [TokenLogit] = [logit(1, 0.1)]
+        var fillerID: TokenID = 1000
+        for a in 0..<17 {
+            for b in 0..<16 {
+                let text = String(UnicodeScalar(UInt8(97 + a))) + String(UnicodeScalar(UInt8(97 + b)))
+                records.append(record(fillerID, text)) // first byte 'a'..'q' — never 'z'
+                rootLogits.append(logit(fillerID, 5.0)) // outranks the target so it dominates top-256
+                fillerID += 1
+            }
+        }
+        XCTAssertGreaterThan(rootLogits.count, 256, "fixture must exceed the pre-selection window")
+
+        let engine = ConstrainedGenerationEngine(runtime: runtime([[]: rootLogits]), profile: profile(records))
+
+        let candidates = try await engine.completions(
+            for: request(requiredPrefix: Array("z".utf8), maxTokens: 1)
+        )
+
+        XCTAssertEqual(candidates.map(\.text), ["zo"], "the only admissible token must be found")
+    }
+
     func testUnsatisfiableRequiredPrefixYieldsNothing() async throws {
         let profile = profile([record(1, "go"), record(2, "be")])
         let runtime = runtime([[]: [logit(1, 1.0), logit(2, 1.0)]])
@@ -532,5 +563,47 @@ final class ConstrainedGenerationEngineTests: XCTestCase {
             for: typoRequest(beforeCursor: "See you Tom")
         )
         XCTAssertEqual(candidates.first?.text, "orow.")
+    }
+
+    /// ADR-025 follow-up: with mid-word healing (ADR-019) the branch text re-emits the typed stem
+    /// (`" coll…"`), so it begins with the heal's leading space. The guard must strip the heal before
+    /// reconstructing the current word; otherwise the leading word is empty and the nonsense word is
+    /// never judged. Here the higher-scoring "collvm" is dropped through the heal so the real word
+    /// "collaboration" surfaces instead.
+    func testHealedMidWordTypoBranchDroppedThroughHeal() async throws {
+        let records = [
+            record(1, " coll"), record(20, "vm"), record(21, "aboration"), record(30, " ")
+        ]
+        let logits: [[TokenID]: [TokenLogit]] = [
+            []: [logit(1, 2.0)],
+            [1]: [logit(20, 2.0), logit(21, 1.0)], // nonsense "vm" out-scores "aboration"
+            [1, 20]: [logit(30, 2.0)],
+            [1, 21]: [logit(30, 2.0)]
+        ]
+        // `prompt` is empty so the scripted runtime keys logits on the branch tokens alone (it has no
+        // KV-fork override and decodes `anchor + suffix`); the guard's stem comes from `beforeCursor`.
+        let healedRequest = CompletionRequest(
+            context: TextFieldContext(beforeCursor: "This is a coll", afterCursor: "", target: Self.testTarget),
+            prompt: "",
+            requiredPrefixBytes: Array(" coll".utf8),
+            mode: .prose,
+            maxCompletionTokens: 3,
+            maxDisplayWidth: 80
+        )
+
+        // Without a guard, the higher-scoring nonsense word wins.
+        let noGuard = ConstrainedGenerationEngine(runtime: runtime(logits), profile: profile(records))
+        let bug = try await noGuard.completions(for: healedRequest)
+        XCTAssertEqual(bug.first?.text, " collvm ", "without the guard the nonsense word out-scores the real one")
+
+        // With a recogniser that knows only "collaboration", the typo branch is dropped mid-search
+        // even though the completion re-emits the healed stem.
+        let guarded = ConstrainedGenerationEngine(
+            runtime: runtime(logits),
+            profile: profile(records),
+            wordRecognizer: StubRecognizer(known: ["collaboration"])
+        )
+        let fixed = try await guarded.completions(for: healedRequest)
+        XCTAssertEqual(fixed.map(\.text), [" collaboration "], "healed nonsense dropped, real word kept")
     }
 }

@@ -11,6 +11,7 @@ import CompletionUI
 import ConstrainedGeneration
 import MacContextCapture
 import ModelRuntime
+import Personalization
 import Prompting
 import TextInsertion
 import TokenProfiles
@@ -40,8 +41,10 @@ enum KeyTypeModuleGraph {
         return PromptBuilder(tokenCounter: counter, maxPromptTokens: maxPromptTokens)
     }
 
-    static func makeCompatibilityStore() -> AppCompatibilityStore {
-        AppCompatibilityStore()
+    static func makeCompatibilityStore(
+        userDisabledBundleIdentifiers: Set<String> = []
+    ) -> AppCompatibilityStore {
+        AppCompatibilityStore(userDisabledBundleIdentifiers: userDisabledBundleIdentifiers)
     }
 
     /// System-dictionary word recogniser for the decoder's current-word typo guard (ADR-015).
@@ -68,10 +71,16 @@ enum KeyTypeModuleGraph {
         )
     }
 
-    /// Local writing-history store. Currently an empty in-memory stub; M8 swaps in a
-    /// real on-disk store fed by the user's recent typing.
-    static func makeWritingHistory() -> WritingHistoryProviding {
-        InMemoryWritingHistoryStore()
+    /// Local writing-history store (M8): an encrypted-at-rest SQLCipher database fed by the user's
+    /// recent typing, used to personalize `previousUserInputs`. Falls back to a no-op store if the
+    /// database can't be opened, so a storage failure never breaks completions. The recorder and the
+    /// prompt path must share one instance, so the app builds it once and injects it. See ADR-023.
+    static func makeWritingHistory() -> WritingHistoryStoring {
+        do {
+            return try PersistentWritingHistoryStore()
+        } catch {
+            return NullWritingHistoryStore()
+        }
     }
 
     /// Default tokenizer family the app expects a profile for. Qwen3.5 and Qwen3.6
@@ -105,7 +114,9 @@ enum KeyTypeModuleGraph {
         for context: TextFieldContext,
         builder: PromptBuilder = makePromptBuilder(),
         compatibilityStore: AppCompatibilityStore = makeCompatibilityStore(),
-        history: WritingHistoryProviding = makeWritingHistory(),
+        // Cheap default so an accidental omission never opens the encrypted DB; the app always
+        // passes the shared store explicitly (see CompletionController / AppDelegate).
+        history: WritingHistoryProviding = InMemoryWritingHistoryStore(),
         pasteboardText: String? = nil,
         screenText: String? = nil,
         mode: PromptTemplateMode = .baseContinuation

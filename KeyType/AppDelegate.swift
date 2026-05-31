@@ -7,18 +7,27 @@
 
 import AppKit
 import MacContextCapture
+import Personalization
 import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let onboardingWindowID = "onboarding"
+    static let settingsWindowID = "settings"
     private static let hasCompletedOnboardingDefaultsKey = "KeyType.hasCompletedOnboarding"
 
     let permissions = PermissionsManager()
-    // One AX tracker feeds both the (debug) context capture and the live completion pipeline.
+    let settings: SettingsStore
+    // One AX tracker feeds the (debug) context capture, the live completion pipeline, and the
+    // writing-history recorder.
     private let tracker: AccessibilityContextTracker
+    // Shared, encrypted writing-history store + local telemetry. Built once so the recorder (writes)
+    // and the prompt path (reads) use the same database connection. See ADR-023.
+    let history: WritingHistoryStoring
+    let telemetry: CompletionTelemetryStore
     let contextCapture: ContextCaptureController
     let completion: CompletionController
+    let historyRecorder: WritingHistoryRecorder
     private let acceptance = CompletionAcceptanceController()
     private var permissionSyncTimer: Timer?
     /// Set once the user has confirmed quitting and the async model teardown is under way, so the
@@ -28,10 +37,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let tracker = AccessibilityContextTracker()
         self.tracker = tracker
+        let settings = SettingsStore()
+        self.settings = settings
+        let history = KeyTypeModuleGraph.makeWritingHistory()
+        let telemetry = CompletionTelemetryStore()
+        self.history = history
+        self.telemetry = telemetry
+        let compatibilityStore = KeyTypeModuleGraph.makeCompatibilityStore(
+            userDisabledBundleIdentifiers: settings.perAppDisabled
+        )
         self.contextCapture = ContextCaptureController(tracker: tracker)
-        self.completion = CompletionController(tracker: tracker)
+        self.completion = CompletionController(
+            tracker: tracker,
+            settings: settings,
+            history: history,
+            telemetry: telemetry,
+            compatibilityStore: compatibilityStore
+        )
+        self.historyRecorder = WritingHistoryRecorder(
+            tracker: tracker,
+            store: history,
+            settings: settings,
+            compatibilityStore: compatibilityStore
+        )
         super.init()
         acceptance.completionController = completion
+    }
+
+    /// One-action wipe of all on-device personal data: every stored writing sample and the local
+    /// telemetry counters. Backs the Settings "Clear all personal data" control. See ADR-023.
+    func clearAllPersonalData() {
+        history.clearAll()
+        telemetry.clearAll()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -67,10 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if permissions.accessibility.isGranted {
             contextCapture.start()
             completion.start()
+            historyRecorder.start()
             acceptance.start()
         } else {
             contextCapture.stop()
             completion.stop()
+            historyRecorder.stop()
             acceptance.stop()
         }
     }

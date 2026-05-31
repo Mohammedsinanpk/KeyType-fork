@@ -30,5 +30,16 @@ struct KeyTypeApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .commandsRemoved()
+
+        Window("KeyType Settings", id: AppDelegate.settingsWindowID) {
+            SettingsView(
+                settings: appDelegate.settings,
+                telemetry: appDelegate.telemetry,
+                clearPersonalData: { appDelegate.clearAllPersonalData() }
+            )
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .commandsRemoved()
     }
 }

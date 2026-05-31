@@ -34,6 +34,7 @@ enum TokenSampler {
         mode: CompletionMode,
         profile: AutocompleteProfile,
         configuration: DecodingConfiguration,
+        constrained: Bool = false,
         isAdmissible: (TokenID) -> Bool
     ) -> SamplerResult {
         guard !logits.isEmpty else { return .empty }
@@ -46,7 +47,17 @@ enum TokenSampler {
         //    token, leaving behaviour identical. Pre-selection ignores per-token bias, which for
         //    the real profile is static and small relative to the logit spread — a token far down
         //    the raw-logit ranking cannot realistically be biased into the top-k.
-        let preselectCount = min(logits.count, max(configuration.topK * 4, 256))
+        //
+        //    EXCEPTION: when a required prefix is active (`constrained`), the admissible tokens may
+        //    sit far below the model's globally top-ranked tokens (e.g. mid-word token healing,
+        //    ADR-019, forces a continuation the model finds unlikely in context — the classic
+        //    "an collaboration" case). Restricting to the top raw-logit slice would mask every
+        //    admissible token out, collapse the branch, and yield zero candidates (`noCandidate`).
+        //    So scan the full vocabulary here: the admissible set for a specific byte-prefix is
+        //    tiny, and this path only runs while the user is actively completing a word. See ADR-025.
+        let preselectCount = constrained
+            ? logits.count
+            : min(logits.count, max(configuration.topK * 4, 256))
         let candidates = preselectCount < logits.count
             ? topByLogit(logits, count: preselectCount)
             : logits

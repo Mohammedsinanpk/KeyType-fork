@@ -46,9 +46,10 @@ public struct FocusedFieldReader {
     /// Read the focused AX element into a snapshot. Returns nil if the element has no AX
     /// value (likely not a text-bearing field).
     public func snapshot(of element: AXUIElement) -> FocusedFieldSnapshot? {
-        let rawValue = AXCaretHelper.stringValue(for: kAXValueAttribute as CFString, on: element) ?? ""
-        let axRange = AXCaretHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element)
-        let selectedTextAttr = AXCaretHelper.stringValue(for: kAXSelectedTextAttribute as CFString, on: element)
+        let textElement = Self.textElement(for: element)
+        let rawValue = AXCaretHelper.stringValue(for: kAXValueAttribute as CFString, on: textElement) ?? ""
+        let axRange = AXCaretHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: textElement)
+        let selectedTextAttr = AXCaretHelper.stringValue(for: kAXSelectedTextAttribute as CFString, on: textElement)
 
         // Selectable text fields almost always expose either AXValue or AXSelectedTextRange.
         // If neither is present, fall back to whatever we can glean (still produces a
@@ -56,7 +57,7 @@ public struct FocusedFieldReader {
         let split = TextCursorSplitter.split(text: rawValue, axRange: axRange)
 
         // Caret rect (may be nil for elements without supported geometry attributes).
-        let caretGeometry = resolver.resolveCaretRect(for: element)
+        let caretGeometry = resolver.resolveCaretRect(for: textElement)
 
         // Selection: prefer the explicit AXSelectedText, fall back to the slice from the split.
         let effectiveSelected: String? = {
@@ -71,19 +72,19 @@ public struct FocusedFieldReader {
 
         let geometry = TextFieldGeometry(
             cursorRect: caretGeometry?.rect,
-            fieldRect: Self.fieldRect(for: element),
+            fieldRect: Self.fieldRect(for: textElement),
             isAtEndOfLine: split.isAtEndOfLine,
             isRightToLeft: WritingDirection.isRightToLeft(split.beforeCursor.isEmpty ? rawValue : split.beforeCursor),
             cursorRectQuality: Self.caretQuality(from: caretGeometry?.qualityLabel)
         )
 
-        let target = AppTargetResolver.resolveAppTarget(for: element)
+        let target = AppTargetResolver.resolveAppTarget(for: textElement)
 
-        let placeholder = AXCaretHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: element)
-        let labels = AppTargetResolver.collectLabels(for: element)
+        let placeholder = AXCaretHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: textElement)
+        let labels = AppTargetResolver.collectLabels(for: textElement)
         let language = LanguageDetector.detectLanguage(in: split.beforeCursor)
         let traits = AppTargetResolver.collectTraits(
-            for: element,
+            for: textElement,
             target: target,
             placeholder: placeholder,
             labels: labels
@@ -108,6 +109,62 @@ public struct FocusedFieldReader {
             caretSource: caretGeometry?.source,
             caretQuality: caretGeometry?.qualityLabel
         )
+    }
+
+    /// Chromium/Safari often expose the focused node as the whole `AXWebArea` while the editable
+    /// control is a descendant. Use the focused node when it already has a selection range; otherwise
+    /// pick the first bounded descendant that looks like the active text control.
+    private static func textElement(for element: AXUIElement) -> AXUIElement {
+        if isUsableTextElement(element) {
+            return element
+        }
+
+        var queue: [(element: AXUIElement, depth: Int)] = [(element, 0)]
+        let maxDepth = 8
+        let maxNodes = 240
+        var visited = 0
+        var seen = Set<String>()
+
+        let rootIdentity = AXCaretHelper.elementIdentity(for: element)
+
+        while !queue.isEmpty, visited < maxNodes {
+            let (candidate, depth) = queue.removeFirst()
+            let identity = AXCaretHelper.elementIdentity(for: candidate)
+            guard seen.insert(identity).inserted else { continue }
+            visited += 1
+
+            if identity != rootIdentity, isUsableTextElement(candidate) {
+                return candidate
+            }
+
+            guard depth < maxDepth else { continue }
+            for child in AXCaretHelper.childElements(of: candidate) {
+                queue.append((child, depth + 1))
+            }
+        }
+
+        return element
+    }
+
+    private static func isUsableTextElement(_ element: AXUIElement) -> Bool {
+        guard isTextRole(element) else { return false }
+        if AXCaretHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element) != nil {
+            return true
+        }
+        return AXCaretHelper.stringValue(for: kAXValueAttribute as CFString, on: element) != nil
+    }
+
+    private static func isTextRole(_ element: AXUIElement) -> Bool {
+        let role = AXCaretHelper.stringValue(for: kAXRoleAttribute as CFString, on: element)
+        let subrole = AXCaretHelper.stringValue(for: kAXSubroleAttribute as CFString, on: element)
+        let textRoles: Set<String> = [
+            kAXTextAreaRole as String,
+            kAXTextFieldRole as String,
+            kAXComboBoxRole as String,
+            "AXEditableText",
+            "AXDocument"
+        ]
+        return role.map(textRoles.contains) == true || subrole.map(textRoles.contains) == true
     }
 
     private static func caretQuality(from label: String?) -> CaretGeometryQuality {

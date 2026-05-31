@@ -213,6 +213,29 @@ final class CandidateFilterTests: XCTestCase {
         )
     }
 
+    func testHealedMidWordTypoIsSuppressed() {
+        // Mid-word healing (ADR-019): the user typed "coll", the heal re-emits " coll", and the
+        // candidate closes the word into the non-word "collvm". The net must see *through* the heal.
+        let filter = DefaultCandidateFilter(wordRecognizer: StubRecognizer(known: ["collaboration"]))
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate(" collvm based SoC"),
+                request: request(beforeCursor: "This is a coll", requiredPrefixBytes: Array(" coll".utf8))
+            ),
+            .currentWordLooksLikeTypo
+        )
+    }
+
+    func testHealedMidWordRealWordIsKept() {
+        let filter = DefaultCandidateFilter(wordRecognizer: StubRecognizer(known: ["collaboration"]))
+        XCTAssertNil(
+            filter.suppressionReason(
+                for: candidate(" collaboration between"),
+                request: request(beforeCursor: "This is a coll", requiredPrefixBytes: Array(" coll".utf8))
+            )
+        )
+    }
+
     func testTypoNetSkippedInCodeMode() {
         let filter = DefaultCandidateFilter(wordRecognizer: StubRecognizer(known: []))
         XCTAssertNil(

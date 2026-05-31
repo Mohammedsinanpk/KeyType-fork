@@ -80,7 +80,7 @@ public struct OverlayPlacementResolver {
         let resolvedMode: OverlayMode
         switch policy.overlayPreference {
         case .inline:
-            resolvedMode = context.geometry.cursorRectQuality == .estimated ? .mirror : mode
+            resolvedMode = mode
         case .textMirror:
             resolvedMode = .mirror
         case .hidden:
@@ -134,8 +134,10 @@ public struct GhostTextView: View {
     public var isRightToLeft: Bool
     public var textColor: NSColor?
 
-    /// Ghost text follows the field's own text color, dimmed to read as a suggestion.
-    private static let ghostOpacity: Double = 0.6
+    /// Ghost text follows the field's own text color when it is trustworthy, but browser AX
+    /// occasionally reports a foreground color that is effectively the page background. Keep the
+    /// final color semi-muted while forcing near-white/near-black extremes back toward visible gray.
+    private static let ghostOpacity: CGFloat = 0.62
 
     public init(
         text: String,
@@ -161,11 +163,12 @@ public struct GhostTextView: View {
         self.textColor = textColor
     }
 
-    private var foregroundStyle: AnyShapeStyle {
-        if let textColor {
-            return AnyShapeStyle(Color(nsColor: textColor).opacity(Self.ghostOpacity))
-        }
-        return AnyShapeStyle(.secondary)
+    private var foregroundColor: Color {
+        Color(nsColor: Self.visibleGhostColor(from: textColor))
+    }
+
+    private var shadowColor: Color {
+        Color(nsColor: Self.contrastShadowColor(for: textColor))
     }
 
     public var body: some View {
@@ -173,7 +176,8 @@ public struct GhostTextView: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Text(line.text)
                     .font(Font(font as CTFont))
-                    .foregroundStyle(foregroundStyle)
+                    .foregroundStyle(foregroundColor)
+                    .shadow(color: shadowColor, radius: 0.6, x: 0, y: 0)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.leading, isRightToLeft ? 0 : line.leadingInset)
@@ -183,5 +187,34 @@ public struct GhostTextView: View {
         }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isRightToLeft ? .trailing : .leading)
             .environment(\.layoutDirection, isRightToLeft ? .rightToLeft : .leftToRight)
+    }
+
+    static func visibleGhostColor(from color: NSColor?) -> NSColor {
+        guard let color = color?.usingColorSpace(.sRGB) else {
+            return NSColor(calibratedWhite: 0.42, alpha: 0.85)
+        }
+
+        let luminance = relativeLuminance(color)
+        if luminance > 0.9 {
+            return NSColor(calibratedWhite: 0.36, alpha: 0.85)
+        }
+        if luminance < 0.08 {
+            return NSColor(calibratedWhite: 0.36, alpha: 0.85)
+        }
+
+        return color.withAlphaComponent(Self.ghostOpacity)
+    }
+
+    private static func contrastShadowColor(for color: NSColor?) -> NSColor {
+        guard let color = color?.usingColorSpace(.sRGB) else {
+            return NSColor.white.withAlphaComponent(0.45)
+        }
+        return relativeLuminance(color) > 0.5
+            ? NSColor.black.withAlphaComponent(0.4)
+            : NSColor.white.withAlphaComponent(0.35)
+    }
+
+    private static func relativeLuminance(_ color: NSColor) -> CGFloat {
+        0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
     }
 }

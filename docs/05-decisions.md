@@ -1057,3 +1057,215 @@ text. Both are now closed:
   - The policy is unit-tested for native/default behavior, Chromium/Google Docs, terminal handling,
     and password exclusions; manual app-matrix validation should focus on AX traits and placement in
     real windows rather than policy branching.
+
+## ADR-023: Personalization & polish — encrypted writing history, local telemetry, Settings (M8)
+
+- Date: 2026-05-30
+- Status: accepted
+- Context: M8 personalizes completions and exposes user control. Four needs: (1) an opt-in, on-device
+  writing-history store feeding `previousUserInputs`, selected by app/domain/typingContext/language/
+  recency under a token budget (`docs/02-prompting.md`); (2) because that store can hold personal
+  text, it must be **encrypted at rest**; (3) local-only telemetry (acceptance/suppression/latency)
+  that can tune decoder thresholds; (4) a Settings UI for model selection, completion length, per-app
+  toggles, and privacy switches. The product rule is on-device & private: sensitive context is
+  opt-in and off by default, and all personal data must be clearable in one action. A separate
+  autocorrect/typo mode was scoped as optional.
+- Decision:
+  - **New `Personalization` SwiftPM package** (kept free of AppKit and of the decoder package): it
+    conforms to `Prompting.WritingHistoryProviding` so it drops in for the M3 in-memory stub. The
+    app target owns recording, the Settings UI, and all wiring (packages stay decoupled).
+  - **Encrypted store (`PersistentWritingHistoryStore`)** backed by **SQLCipher via GRDB**, using the
+    `sqlcipher/GRDB.swift` managed fork (auto-enables SQLCipher without Swift package traits, so it
+    resolves inside the Xcode workspace; the official `groue/GRDB.swift` + `GRDBCIPHER` trait is the
+    alternative once Xcode supports traits cleanly). The DB lives at
+    `~/Library/Application Support/KeyType/History/history.sqlcipher`. The 256-bit key is random,
+    generated once, and stored in the **Keychain** (`KeychainPassphrase`,
+    `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) — never on disk in the clear. Recording and
+    queries swallow DB errors (best-effort, never break typing); a failed open falls back to a no-op
+    `NullWritingHistoryStore`. Selection mixing (recent + longest same-app + a few cross-app recents,
+    capped by an approximate token budget) is factored into a pure, unit-tested `WritingHistorySelection`.
+  - **Recording (`WritingHistoryRecorder`, app target)** subscribes to the shared AX tracker and
+    persists a field's text when focus moves / the app switches / typing goes idle, **only** when the
+    user enabled history, the app/domain allows training-data collection, the field is not
+    secure/sensitive, and the text clears a minimum length. Writes happen off the main actor.
+  - **Telemetry (`CompletionTelemetryStore`)** records shown / suppressed(+reason) / accepted /
+    latency at the controller's existing log points and computes acceptance rate, suppression rate,
+    and latency p50/p95. Stored as plain JSON (non-PII counters + a bounded latency reservoir) in
+    Application Support. `ThresholdTuner` maps the snapshot to a neutral, **clamped** `ThresholdAdjustments`
+    (relative-cutoff delta + min-branch-probability scale) that the app applies onto
+    `DecodingConfiguration` at engine build — widening the search when suppression is very high and
+    acceptance very low, tightening slightly when acceptance is strong, and staying inert below a
+    minimum sample count.
+  - **Settings (`SettingsStore` + `SettingsView`)**: UserDefaults-backed model selection, completion
+    length (→ token/width budget), per-app completion toggles, and privacy switches for history /
+    clipboard / OCR — all three **off by default**. A single "Clear all personal data" action wipes
+    the history rows and telemetry. Per-app disables layer onto `AppCompatibilityStore` (new
+    `userDisabledBundleIdentifiers` initializer) and are also checked live in the controller so
+    runtime toggles take effect immediately. Reachable from the menu bar; read-only local stats are
+    surfaced in the window.
+  - **Autocorrect/typo mode is deferred** (the existing in-beam typo guard, ADR-015, already covers
+    the worst case). Logged here as future work; `CompletionMode.correction` already exists for it.
+- Consequences:
+  - Personal writing text is encrypted at rest and removable in one action; losing/deleting the
+    Keychain key renders the DB unreadable, which is an acceptable hard backstop.
+  - The `sqlcipher/GRDB.swift` dependency is a large git checkout and builds a SQLCipher amalgamation,
+    so first resolution/build is slow; this is the cost of real encrypted SQLite. If the fork ever
+    becomes unsuitable, the fallback is the official GRDB + `GRDBCIPHER` trait, or a CryptoKit
+    AES-GCM encrypted file.
+  - Threshold tuning is intentionally conservative and bounded; it nudges rather than reshapes the
+    decoder, so a noisy session can't destabilize completions.
+  - Tests: `PersonalizationTests` cover store record/query/dedup/clear, that stored text is not
+    plaintext on disk, budget capping, telemetry aggregates/persistence, tuner direction + clamping,
+    and Keychain round-trip (skipped if the environment has no keychain). `ConstrainedGenerationTests`
+    gains a deterministic `HistoryAcceptanceTests` demonstrating that including the user's previous
+    writing in the prompt measurably improves acceptance (0% → 100% on the fixture). `AppCompatibilityTests`
+    cover the user per-app disable. On-device measurement of the live acceptance-rate lift relies on
+    the Settings stats panel.
+
+## ADR-024: Prediction-log quality fixes — trailing-space trim, synchronous typo seam wired
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: A qualitative pass over the on-device prediction log
+  (`~/Library/Application Support/KeyType/Logs/predictions.log`, written by `PredictionLog`) surfaced
+  two low-risk output-quality leaks: (a) several shown completions carried a trailing space
+  (`"new GeForce RTX "`, `"SoC and "`, `"rsin core and "`), which renders as a phantom gap in the
+  ghost text and inserts a stray separator on accept; and (b) the output `DefaultCandidateFilter`'s
+  current-word typo net was inert in the live app because no `SynchronousWordRecognizing` was wired
+  (ADR-016 deliberately left it nil to avoid double spell-checking with the in-beam guard).
+- Decision:
+  - **Trailing-whitespace trim (end-of-line only).** In `CompletionController.present`, after
+    `CaretBoundary.reconcile`, drop trailing whitespace from the anchored completion when
+    `afterCursor` is empty. Mid-line completions keep their trailing whitespace — there the space may
+    be the genuine separator before the existing after-cursor text, so trimming it could merge words.
+  - **Wire the synchronous typo seam.** `SystemWordRecognizer` now also conforms to
+    `SynchronousWordRecognizing` (sharing one `NSSpellChecker` core, conservative + main-thread-gated),
+    and the controller constructs its `DefaultCandidateFilter` with it. This supersedes the
+    "leave the seam nil" sub-decision of ADR-016: the in-beam guard (ADR-015) judges *healed,
+    pre-reconciliation* token paths, whereas the filter re-checks the *finalised* string actually
+    shown — so the second check is genuine defense-in-depth, not a pure duplicate. It runs only on a
+    closed current word and reports "recognised" whenever unsure, so it cannot false-positive.
+- Consequences:
+  - Ghost text no longer shows/inserts a dangling end-of-line space; word/full accepts are cleaner.
+  - The output typo net now fires in production (a marginal extra `NSSpellChecker` call only when a
+    word closes — negligible, and only on the main actor). The supersession of ADR-016's nil-seam
+    note is intentional; the existing `CandidateFilterTests` typo cases now also reflect the live path.
+  - Not addressed here (logged separately as findings): mid-word `noCandidate` cascades when an
+    upstream grammatical error poisons the prompt, apostrophe-variant duplicate candidates consuming
+    beam slots, and redundant re-shows of identical context. Those need decoder/ranking changes.
+
+## ADR-025: Required-prefix decoding bypasses raw-logit pre-selection (fix mid-word `noCandidate`)
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: A prediction-log investigation found that typing an ordinary word mid-stream often produced
+  a run of `SUPPRESS(noCandidate)` until a space was typed (e.g. "collaboration" → 8 straight
+  suppressions; "MediaTek" mid-word). Root cause: `TokenSampler.rank` pre-selects the top
+  `max(topK·4, 256)` tokens **by raw logit** (the ADR-012 perf optimization) and only *then* applies
+  the required-prefix admissibility mask. Mid-word token healing (ADR-019) forces a continuation
+  beginning with the typed bytes; when that continuation is locally improbable — a rare word, or a
+  consonant word after "an" — none of its tokens are in the model's globally top-256, so the
+  admissible pool is empty, the branch collapses with no emitted tokens, no branch ever satisfies the
+  required prefix, and the engine returns zero candidates. The space-then-it-works asymmetry in the
+  log is the fingerprint: a completed word has no required prefix, so all top-256 tokens are
+  admissible. (Note: `docs/03` already specified masking over the *full* vector before top-k/top-p;
+  the implementation applied the optimization in the wrong order for the constrained path.)
+- Decision: Add a `constrained` flag to `TokenSampler.rank`; when set (a branch still has an
+  unsatisfied `remainingPrefix`), skip raw-logit pre-selection and scan the full vocabulary through
+  the admissibility predicate. `ConstrainedGenerationEngine` passes `constrained:
+  !branch.remainingPrefix.isEmpty`. The admissible set for a specific byte-prefix is tiny and this
+  path only runs while the user is actively completing a word, so ADR-012's steady-state perf concern
+  (unconstrained decoding) is unaffected. Regression test `testRequiredPrefixSurvivesBelowPreselectionCutoff`
+  drives an admissible token ranked below the 256-token window and asserts it is still found.
+- Consequences:
+  - Mid-word typing now yields completions at every keystroke instead of dead air; verified on-device
+    ("collaboration" completes and was accepted; zero `noCandidate` across the session).
+  - Trade-off: at very short stems (1–3 new chars) the forced continuation is often a hallucination
+    ("colexed", "collvm") that self-corrects once more letters are typed. The existing typo nets do
+    **not** catch these because a healed completion re-emits the heal's leading space, so
+    `leadingWord(candidate)` is empty and `CurrentWordTypoGuard` / the output filter both bail. Logged
+    as a follow-up: reconstruct the current word through the heal (stem + leadingWord of the
+    heal-stripped completion) so nonsense mid-word continuations can be suppressed. (Resolved in ADR-026.)
+
+## ADR-026: Typo net sees through the heal (suppress nonsense mid-word completions)
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: ADR-025 made mid-word token healing actually produce candidates, which exposed that
+  neither typo net could judge a healed completion. A healed completion re-emits the typed stem with
+  its leading separator space (`" collvm…"`), so `leadingWord(candidate)` is empty and both the
+  in-beam `CurrentWordTypoGuard` and the output `DefaultCandidateFilter` bail before reconstructing
+  the current word — letting nonsense like "collvm" / "colexed" through at short stems.
+- Decision: Strip the heal before reconstructing the current word in both gates. The heal is the
+  request's `requiredPrefixBytes` decoded as a string; `MidWordHealing.strip` removes it (a no-op
+  when unhealed, or when a branch hasn't yet emitted the full stem — the remaining leading space is
+  then safely treated as "not our word"). `CurrentWordTypoGuard` strips parent/child branch text;
+  `DefaultCandidateFilter.looksLikeCurrentWordTypo` strips the candidate text. Reconstruction is then
+  the existing `stem + leadingWord(stripped)`.
+- Consequences:
+  - Healed nonsense mid-word continuations are now dropped (in-beam, so a correctly-spelled branch
+    can surface instead) and suppressed at the output gate; real words ("collaboration") still pass.
+  - Unhealed behaviour is unchanged (`heal == ""` → strip is identity), so all existing typo-net
+    tests stay green. New coverage: `testHealedMidWordTypoBranchDroppedThroughHeal` (engine, in-beam)
+    and `testHealedMidWordTypoIsSuppressed` / `testHealedMidWordRealWordIsKept` (output filter).
+  - The in-beam guard remains conservative (closed-word-only, eligible lowercase words, context-term
+    exempt, recogniser reports "recognised" when unsure), so it cannot suppress a legitimate word.
+
+## ADR-027: Resolve browser web-area focus to the editable descendant
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Browser testing on Markdown Live Preview showed Chrome and Safari can report the focused
+  Accessibility element as the whole `AXWebArea` even when an editable child owns the actual text,
+  selection, caret geometry, and style. Reading the web area directly made context and placement
+  unstable: the ghost text could be anchored against page/browser geometry instead of the editor.
+- Decision: Before building a `TextFieldContext`, `FocusedFieldReader` now resolves the supplied AX
+  element to a bounded descendant with a text role (`AXTextArea`, `AXTextField`, combo box, or known
+  editable text roles) and a selected range or value. Text, selection, caret geometry, field rect,
+  labels, target, and traits are read from that resolved element. The app's `FieldFontResolver`
+  mirrors the same bounded search so font/color probing uses the same editable control.
+- Consequences:
+  - Browser editors whose focus lands on `AXWebArea` now use the child editor's geometry and style,
+    keeping inline ghost text at the caret instead of drifting into browser chrome or page-level
+    coordinates.
+  - The search is deliberately capped (8 levels / 240 nodes) and only runs when the focused element
+    itself is not already usable, preserving the existing native-app fast path.
+
+## ADR-028: Estimated browser carets stay inline by default
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Follow-up browser testing showed the overlay still appeared above the Markdown Live
+  Preview editor even after context capture resolved the editable child. The prediction log proved
+  generation was healthy; the remaining issue was placement. The generic web policy converted every
+  estimated web caret to `textMirror`, and mirror mode intentionally positions ghost text above the
+  caret (`caret.maxY + 2`). In ordinary browser textareas, the estimated caret was good enough for
+  inline x/y, so the fallback caused the visible misplacement.
+- Decision: Do not globally convert estimated web carets to `textMirror`. `OverlayPlacementResolver`
+  now honors `.inline` policy regardless of caret quality, and `AppCompatibilityStore` no longer
+  rewrites estimated web fields to mirror mode. Explicit overrides (for example Google Docs) can
+  still choose `textMirror` where inline geometry is known to be unreliable.
+- Consequences:
+  - Normal browser editors keep ghost text on the same line as the caret instead of one line above.
+  - Truly unreliable web surfaces need explicit compatibility overrides or suppression; the product
+    should not penalize every estimated web caret with an above-line mirror.
+
+## ADR-029: Browser ghost text uses defensive visible color and multiline estimates
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Markdown Live Preview exposed two remaining browser overlay failures after ADR-027/028:
+  Chrome could return an estimated field-frame caret for a tall editor, which anchored the ghost text
+  to the field edge instead of the current line; and browser AX style probing could report a
+  foreground color that was effectively the white editor background, making the ghost text appear
+  invisible even when placement and generation were correct.
+- Decision: Estimated caret fallback now derives a conservative line rect from the current line index
+  and a bounded line height instead of using the full field height. `GhostTextView` also treats
+  missing, near-white, and near-black AX foreground colors as untrustworthy and renders a muted,
+  high-alpha gray with a subtle contrast shadow. Normal mid-tone field colors are still preserved at
+  ghost opacity.
+- Consequences:
+  - Browser textarea-style editors keep inline ghost text on the typed line instead of near the top or
+    bottom of the whole field.
+  - Ghost text remains visible on white web editors even when AX reports unusable styling, while
+    native fields and trustworthy colored text continue to inherit the field's own color.

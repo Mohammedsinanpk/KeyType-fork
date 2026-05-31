@@ -149,6 +149,24 @@ public struct AppCompatibilityStore {
         self.overrides = overrides
     }
 
+    /// Builds a store from the built-in `overrides` plus user-chosen per-app disables (from
+    /// Settings). Each disabled bundle id gets an injected override that turns completions, Tab
+    /// acceptance, and training-data collection off for that app — layered on top of the defaults,
+    /// so a user disable always wins. See ADR-023.
+    public init(
+        overrides: [TargetOverride] = AppCompatibilityStore.defaultOverrides,
+        userDisabledBundleIdentifiers: Set<String>
+    ) {
+        self.overrides = overrides + userDisabledBundleIdentifiers.map { bundleID in
+            TargetOverride(
+                bundleIdentifier: bundleID,
+                completionsDisabled: true,
+                tabShortcutsDisabled: true,
+                trainingDataCollectionDisabled: true
+            )
+        }
+    }
+
     public func policy(for target: AppTarget) -> CompletionPolicy {
         var policy = CompletionPolicy()
 
@@ -194,10 +212,6 @@ public struct AppCompatibilityStore {
 
         if context.traits.isTerminalLike {
             applyTerminalSafety(to: &policy)
-        }
-
-        if context.traits.isWebField, context.geometry.cursorRectQuality == .estimated {
-            policy.overlayPreference = .textMirror
         }
 
         if context.traits.isSecureTextEntry

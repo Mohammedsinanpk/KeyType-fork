@@ -186,19 +186,32 @@ Chromium, a terminal, and a password field. No broken native Tab behavior.
 
 ---
 
-## M8 — Personalization & polish  ⬜
+## M8 — Personalization & polish  🟡
+
+See ADR-023.
 
 **Tasks**
 
-- Local writing-history store + retrieval feeding `previousUserInputs` (opt-in, on-device).
-- Acceptance/suppression/latency telemetry (local only) to tune biases & thresholds.
-- Settings UI: model selection, completion length, per-app toggles, privacy switches.
-- Autocorrect/typo mode (separate from completion) if desired.
+- ✅ Local writing-history store + retrieval feeding `previousUserInputs` (opt-in, on-device).
+Encrypted at rest with **SQLCipher** (GRDB), key in the Keychain; the new `Personalization`
+package's `PersistentWritingHistoryStore` conforms to `WritingHistoryProviding`, and
+`WritingHistoryRecorder` (app target) captures the user's typing — gated by the privacy switch,
+`allowsTrainingDataCollection`, and secure-field exclusion. Selection mixes recent + longest
+same-app + a few cross-app recents under a token budget.
+- ✅ Acceptance/suppression/latency telemetry (local only, `CompletionTelemetryStore`) wired into
+the controller; `ThresholdTuner` applies bounded nudges to the decoder's relative-cutoff and
+min-branch-probability at engine build.
+- ✅ Settings UI (`SettingsView`/`SettingsStore`): model selection, completion length, per-app
+toggles, and privacy switches (history/clipboard/OCR **off by default**) with a one-action
+"Clear all personal data". Per-app disables layer onto `AppCompatibility`.
+- ⬜ Autocorrect/typo mode (separate from completion) — **deferred** (ADR-023); the in-beam typo
+guard (ADR-015) covers the worst case for now.
 
 **Acceptance**
 
-- History improves acceptance rate measurably; settings persist; all personal data stays local
-and is clearable.
+- ✅ History improves acceptance rate measurably (deterministic `HistoryAcceptanceTests`; live lift
+visible in the Settings stats panel); settings persist (UserDefaults); all personal data stays
+local (encrypted DB + local JSON telemetry) and is clearable in one action.
 
 ---
 

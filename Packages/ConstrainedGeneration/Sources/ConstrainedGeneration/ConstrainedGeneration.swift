@@ -78,6 +78,11 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
                     mode: request.mode,
                     profile: profile,
                     configuration: configuration,
+                    // A still-unsatisfied required prefix forces a specific continuation that may rank
+                    // far below the model's globally top tokens; bypass raw-logit pre-selection so the
+                    // admissible tokens aren't masked out and the branch can't silently collapse to
+                    // `noCandidate` (ADR-025).
+                    constrained: !branch.remainingPrefix.isEmpty,
                     isAdmissible: { profile.tokenAllowed($0, afterRequiredPrefix: branch.remainingPrefix) }
                 )
 

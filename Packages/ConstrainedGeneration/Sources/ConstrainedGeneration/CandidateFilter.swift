@@ -127,9 +127,16 @@ public final class DefaultCandidateFilter: CandidateFiltering {
         let stem = CurrentWordTypoGuard.trailingWord(of: request.context.beforeCursor)
         guard !stem.isEmpty else { return false } // model started a fresh word — its own, leave it
 
-        let lead = CurrentWordTypoGuard.leadingWord(of: candidate.text)
+        // For a healed request (ADR-019) the candidate re-emits the typed stem (`" coll…"`); strip it
+        // so the leading word is the genuinely-new continuation rather than an empty leading-space run
+        // — otherwise healed mid-word completions slip past the net entirely (ADR-025 follow-up).
+        let judged = request.requiredPrefixBytes.isEmpty
+            ? candidate.text
+            : MidWordHealing.strip(candidate.text, heal: String(decoding: request.requiredPrefixBytes, as: UTF8.self))
+
+        let lead = CurrentWordTypoGuard.leadingWord(of: judged)
         guard !lead.isEmpty else { return false } // completion opened on a boundary — not our word
-        guard lead.count < candidate.text.count else { return false } // word still open → never judge
+        guard lead.count < judged.count else { return false } // word still open → never judge
 
         let word = stem + lead
         guard CurrentWordTypoGuard.isEligible(word) else { return false }

@@ -74,7 +74,33 @@ final class AppCompatibilityTests: XCTestCase {
         XCTAssertFalse(policy.allowsTrainingDataCollection)
     }
 
-    func testEstimatedWebCaretFallsBackToTextMirrorOverlay() {
+    func testUserPerAppDisableOverridesDefaultEnabledPolicy() {
+        let target = AppTarget(bundleIdentifier: "com.apple.TextEdit", appName: "TextEdit")
+        let context = TextFieldContext(beforeCursor: "hello there", target: target)
+
+        // By default TextEdit allows completions.
+        XCTAssertTrue(AppCompatibilityStore().policy(for: context).isCompletionEnabled)
+
+        // A user-chosen per-app disable (from Settings) must turn it off.
+        let store = AppCompatibilityStore(
+            userDisabledBundleIdentifiers: ["com.apple.TextEdit"]
+        )
+        let policy = store.policy(for: context)
+        XCTAssertFalse(policy.isCompletionEnabled)
+        XCTAssertFalse(policy.allowsTabAcceptance)
+        XCTAssertFalse(policy.allowsTrainingDataCollection)
+    }
+
+    func testUserPerAppDisableLeavesOtherAppsUnaffected() {
+        let store = AppCompatibilityStore(
+            userDisabledBundleIdentifiers: ["com.apple.TextEdit"]
+        )
+        let other = AppTarget(bundleIdentifier: "com.apple.Notes", appName: "Notes")
+        let context = TextFieldContext(beforeCursor: "hello there", target: other)
+        XCTAssertTrue(store.policy(for: context).isCompletionEnabled)
+    }
+
+    func testEstimatedWebCaretKeepsInlineOverlayPreference() {
         let target = AppTarget(bundleIdentifier: "com.google.Chrome", appName: "Chrome", domain: "example.com")
         let context = TextFieldContext(
             beforeCursor: "hello",
@@ -85,6 +111,6 @@ final class AppCompatibilityTests: XCTestCase {
 
         let policy = AppCompatibilityStore(overrides: []).policy(for: context)
 
-        XCTAssertEqual(policy.overlayPreference, .textMirror)
+        XCTAssertEqual(policy.overlayPreference, .inline)
     }
 }
