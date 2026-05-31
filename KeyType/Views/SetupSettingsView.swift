@@ -15,9 +15,6 @@ struct SetupSettingsView: View {
         Form {
             Section("Setup") {
                 Button("Run setup again…") { runSetupAgain() }
-                Text("Re-opens the onboarding wizard (permissions, model, keybinds, and macOS predictions).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

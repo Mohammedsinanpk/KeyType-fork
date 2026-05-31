@@ -6,6 +6,7 @@
 //  category lives in its own file.
 //
 
+import LaunchAtLogin
 import SwiftUI
 
 struct GeneralSettingsView: View {
@@ -13,6 +14,13 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Startup") {
+                LaunchAtLogin.Toggle()
+                Text("Start KeyType automatically when you log in to your Mac.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Completion length") {
                 Picker("Length", selection: $settings.completionLength) {
                     ForEach(CompletionLength.allCases) { length in

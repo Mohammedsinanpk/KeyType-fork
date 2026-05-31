@@ -1630,3 +1630,57 @@ text. Both are now closed:
     engine's caching/clear via a fake capturer (`WindowOCRCaptureEngineTests`), plus the provider
     stubs in `AutocompleteCore` (`ScreenTextProvidingTests`). `swift build`/`swift test` stay green
     for both touched packages.
+
+## ADR-041 — Guided drag-and-drop permission flow
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Granting Accessibility / Input Monitoring / Screen Recording is the biggest first-run
+  friction point. The onboarding "Open … Settings" buttons deep-linked to the right pane, but the
+  user still had to find KeyType in a long, alphabetical privacy list and flip the switch — easy to
+  get lost in. The sibling reconstruction effort (Cotabby) had already proven a smoother pattern, so
+  we cloned it rather than reinventing.
+- Decision: Add a guided overlay that opens System Settings and floats a borderless, non-activating
+  `NSPanel` ("Drag KeyType to the list above to allow …") containing a real draggable app row. The
+  user drags KeyType straight into the privacy table. New app-target files under `Logic/Permission/`:
+  `PermissionKind` (metadata + guidance style), `PermissionHostApp` (bundle URL/icon/name),
+  `SystemSettingsWindowLocator` (finds the live Settings window in AppKit coords, multi-monitor
+  aware), `PermissionDragSourceView` (`NSDraggingSource` writing the bundle `NSURL` so TCC binds the
+  grant to the running process's identity), `PermissionOverlayWindowController` (spring/Bezier launch
+  animation + tracks the Settings window), and `PermissionGuidanceController` (`@MainActor`
+  orchestrator: native prompt first, then overlay, 0.15 s reposition timer + activation observer,
+  auto-dismiss on grant). `ScreenFrameReader` (Views) bridges the SwiftUI "Allow" button's screen
+  rect so the overlay animates out of it. The existing `PermissionsManager` is *extended* (not
+  rewritten) with kind-based `isGranted(_:)` / `requestSystemAccess(for:)` / `openSettings(for:)`
+  helpers that dispatch to the existing per-permission methods. Onboarding's `PermissionCard` now
+  takes a `PermissionKind` and calls `guidance.requestAccess(for:sourceFrameInScreen:)`; the
+  controller is created once in `AppDelegate` and passed to `OnboardingView`.
+- Consequences:
+  - AppKit (not SwiftUI) for the drag/overlay because the flow needs `NSDraggingSession`, pasteboard
+    item providers, a snapshot drag image, and a non-activating panel — all awkward in SwiftUI. The
+    overlay uses `NSWindow.displayLink(target:selector:)` (macOS 14+); the app's deployment target is
+    14.0 so this is in range.
+  - All three permissions use `.guidedOverlay` (including the optional Screen Recording); the
+    required/optional labelling stays a separate UI concern. The overlay is torn down when the user
+    leaves the permissions step or closes onboarding so it can't linger over System Settings.
+  - The new files are pure app-target wiring; no SwiftPM package or package-product changes, so only
+    the `.xcodeproj` (`project.pbxproj`) gained the file refs + a `Logic/Permission` group. Build of
+    the `KeyType` scheme stays green.
+
+## ADR-042 — KeyType app icon direction
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: KeyType needs a macOS Tahoe/Liquid Glass-era app icon that works across the newer light,
+  dark, and clear/tinted icon appearances while still reading at small Dock sizes. The product is
+  about short cursor-local autocomplete, not a general AI chat surface.
+- Decision: Use a translucent keyboard keycap as the container metaphor, with a vertical insertion
+  caret and three short continuation bars as the glyph. The default/light appearance uses white glass
+  with a graphite caret and cyan completion marks; the dark appearance uses a smoky charcoal glass
+  tile with a bright caret and cyan completion marks to align with native dark Dock icon aesthetics;
+  the clear/tinted source uses a neutral monochrome version of the same geometry.
+- Consequences:
+  - The icon avoids letters, app initials, chat bubbles, and full keyboard layouts so it remains
+    language-independent and directly tied to "text at the cursor".
+  - The Icon Composer package keeps separate light, dark, and clear/tinted raster sources rather than
+    relying on automatic darkening of the light source, preserving contrast in dark mode.
