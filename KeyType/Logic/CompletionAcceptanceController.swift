@@ -2,11 +2,12 @@
 //  CompletionAcceptanceController.swift
 //  KeyType
 //
-//  Global Tab / Shift+Tab acceptance hotkey (M6 / ADR-016). A session-level CGEvent tap consumes
-//  Tab only while a completion is visible and the app's CompletionPolicy allows Tab acceptance;
-//  otherwise every Tab passes straight through so native Tab behaviour is untouched.
+//  Global acceptance hotkeys (M6 / ADR-016). A session-level CGEvent tap consumes the configured
+//  accept keys only while a completion is visible and the app's CompletionPolicy allows Tab
+//  acceptance; otherwise every key passes straight through so native behaviour is untouched.
 //
-//  Tab accepts the next word of the suggestion; Shift+Tab accepts the whole suggestion.
+//  The accept-word and accept-full hotkeys are user-configurable (SettingsStore); they default to
+//  Tab and Shift+Tab respectively.
 //
 
 import AppKit
@@ -15,10 +16,9 @@ import os
 
 @MainActor
 final class CompletionAcceptanceController {
-    /// macOS virtual key code for Tab.
-    private static let tabKeyCode: Int64 = 48
-
     weak var completionController: CompletionController?
+    /// Source of the configurable acceptance hotkeys. Read on every matching key-down.
+    weak var settings: SettingsStore?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -83,25 +83,30 @@ final class CompletionAcceptanceController {
         }
 
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-        guard event.getIntegerValueField(.keyboardEventKeycode) == Self.tabKeyCode else {
-            return Unmanaged.passUnretained(event)
-        }
 
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
-        // Leave command/control/option-Tab (app switching, etc.) to the system.
-        if flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate) {
+
+        let acceptWord = settings?.acceptWordShortcut ?? .defaultAcceptWord
+        let acceptFull = settings?.acceptFullShortcut ?? .defaultAcceptFull
+
+        // Match the full-acceptance hotkey first: it is typically the same key as accept-word plus a
+        // modifier (Shift+Tab vs Tab), so checking the more specific binding first is required.
+        let matchesFull = acceptFull.matches(keyCode: keyCode, flags: flags)
+        let matchesWord = acceptWord.matches(keyCode: keyCode, flags: flags)
+        guard matchesFull || matchesWord else {
             return Unmanaged.passUnretained(event)
         }
 
         guard let controller = completionController, controller.canAcceptCompletion else {
-            return Unmanaged.passUnretained(event) // nothing to accept → native Tab
+            return Unmanaged.passUnretained(event) // nothing to accept → native key behaviour
         }
 
-        if flags.contains(.maskShift) {
+        if matchesFull {
             controller.acceptFullCompletion()
         } else {
             controller.acceptNextWord()
         }
-        return nil // consume — Tab accepted the completion instead of inserting a tab
+        return nil // consume — the key accepted the completion instead of its native action
     }
 }

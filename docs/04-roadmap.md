@@ -60,24 +60,33 @@ caret). A debug overlay (reusing Red Dot's window) sits on the caret. No main-th
 
 ---
 
-## M2 — Model runtime (llama.cpp)  🟡
+## M2 — Model runtime (llama.cpp)  ✅
 
-Replace the stub with a real local model.
+Replace the stub with a real local model. **Done** — `LlamaModelRuntime` (`ModelRuntime`
+package) is an actor-isolated `LocalModelRuntime` over the official llama.cpp prebuilt
+xcframework (see ADR-007), implementing GGUF load, tokenize/detokenize, raw token bytes, batch
+decode, next-token logits, EOS/EOT, and vocab size. KV prefix reuse is implemented via
+`reuseThreshold` (pure-append-or-clear) plus the anchored snapshot/restore path used by the
+multi-branch decoder; the literal `seq_cp/keep/rm` ops were replaced by
+`llama_state_seq_get_data`/`set_data` because cross-sequence `seq_cp` aborts on the hybrid
+recurrent/SSM Qwen3.5 model (see ADR-018).
 
 **Tasks**
 
-- Integrate **llama.cpp** (SwiftPM wrapper or prebuilt xcframework; pick one and record why in
+- ✅ Integrate **llama.cpp** (SwiftPM wrapper or prebuilt xcframework; pick one and record why in
 `05-decisions.md`). Implement `LocalModelRuntime` + `ModelTokenizing` over it: load GGUF,
 tokenize/detokenize, raw token bytes, decode batch, next-token logits, EOS/EOT, vocab size.
-- Implement KV-cache sequence ops (`seq_cp/keep/rm`, `clear`) and a `reuseThreshold` for prefix
-reuse across keystrokes.
-- Keep `StubModelRuntime` working for tests; keep the protocol stable.
+- ✅ Implement KV-cache sequence ops and a `reuseThreshold` for prefix reuse across keystrokes
+(snapshot/restore instead of `seq_cp/keep/rm` on hybrid memory — ADR-018).
+- ✅ Keep `StubModelRuntime` working for tests; keep the protocol stable.
 
 **Acceptance**
 
-- Given a prompt string and a small open GGUF, the runtime returns plausible next-token logits and
-can decode N tokens. A test asserts tokenizer round-trip (`detokenize(tokenize(x)) == x` for
-ASCII) and that KV reuse produces identical logits to a full decode for an unchanged prefix.
+- ✅ Given a prompt string and a small open GGUF, the runtime returns plausible next-token logits
+and can decode N tokens. A test asserts tokenizer round-trip (`detokenize(tokenize(x)) == x` for
+ASCII) and that KV reuse produces identical logits to a full decode for an unchanged prefix
+(`LlamaModelRuntimeTests`). On-device only: the GGUF-backed tests `XCTSkipUnless` a model is
+present in the app-support container (ADR-007), so they skip on a bare machine.
 
 ---
 

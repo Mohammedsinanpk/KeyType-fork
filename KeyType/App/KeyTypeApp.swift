@@ -19,13 +19,15 @@ struct KeyTypeApp: App {
                 .environment(appDelegate.contextCapture)
                 .environment(appDelegate.completion)
         } label: {
-            Image(systemName: "text.cursor")
+            MenuBarLabel()
         }
         .menuBarExtraStyle(.menu)
 
         Window("KeyType", id: AppDelegate.onboardingWindowID) {
-            OnboardingView()
+            OnboardingView(markCompleted: { appDelegate.markOnboardingCompleted() })
                 .environment(appDelegate.permissions)
+                .environment(appDelegate.settings)
+                .environment(appDelegate.modelSetup)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
@@ -35,7 +37,13 @@ struct KeyTypeApp: App {
             SettingsView(
                 settings: appDelegate.settings,
                 telemetry: appDelegate.telemetry,
-                clearPersonalData: { appDelegate.clearAllPersonalData() }
+                modelSetup: appDelegate.modelSetup,
+                clearPersonalData: { appDelegate.clearAllPersonalData() },
+                runSetupAgain: {
+                    appDelegate.resetOnboarding()
+                    appDelegate.requestOpenOnboarding()
+                },
+                reloadModel: { appDelegate.completion.reloadModel() }
             )
         }
         .windowResizability(.contentSize)

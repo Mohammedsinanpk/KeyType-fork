@@ -16,6 +16,7 @@ import ConstrainedGeneration
 import Foundation
 import LlamaModelRuntime
 import MacContextCapture
+import ModelManagement
 import ModelRuntime
 import Observation
 import Personalization
@@ -61,6 +62,13 @@ final class CompletionController {
 
     private(set) var loadState: LoadState = .idle
     private(set) var isRunning = false
+
+    /// The model filename the current engine was (or is being) built from. Used to coalesce
+    /// redundant `reloadModel()` calls — e.g. when a freshly downloaded model is auto-selected,
+    /// `onModelReady` reloads explicitly *and* the Settings picker's `onChange` fires for the same
+    /// programmatic selection. Set synchronously on the main actor before each load suspends, so the
+    /// second call sees the target already active and no-ops.
+    private var activeModelFilename: String?
 
     /// The completion currently shown as ghost text (the portion still ahead of the live caret).
     /// Nil when nothing is displayed. Exposed for the Tab acceptance controller / UI binding.
@@ -126,6 +134,7 @@ final class CompletionController {
         // model. Both are read now, on the main actor, before suspending into the off-main load.
         let adjustments = ThresholdTuner.adjustments(for: telemetry.snapshot())
         let modelFilename = settings.selectedModelFilename ?? ModelContainer.defaultModelFilename
+        activeModelFilename = modelFilename
         Task {
             do {
                 let engine = try await Self.buildEngine(
@@ -140,6 +149,23 @@ final class CompletionController {
                 self.loadState = .unavailable("\(error)")
                 self.log.error("Completion engine unavailable: \(error, privacy: .public)")
             }
+        }
+    }
+
+    /// Tear down the current engine and reload from the currently selected model. Used after the
+    /// user downloads/selects a different model so the change takes effect without relaunching.
+    /// No-ops when the selected model is already the one loaded (or mid-load), so duplicate triggers
+    /// (the post-download auto-select reloads *and* fires the picker's `onChange`) don't kick off two
+    /// concurrent engine builds.
+    func reloadModel() {
+        let target = settings.selectedModelFilename ?? ModelContainer.defaultModelFilename
+        guard target != activeModelFilename || loadState == .idle else { return }
+        activeModelFilename = target
+        Task {
+            if let engine { await engine.shutdown() }
+            engine = nil
+            loadState = .idle
+            loadIfNeeded()
         }
     }
 
@@ -170,6 +196,7 @@ final class CompletionController {
     func shutdown() async {
         stop()
         loadState = .idle
+        activeModelFilename = nil
         if let engine {
             await engine.shutdown()
         }
@@ -500,12 +527,19 @@ final class CompletionController {
         modelFilename: String,
         adjustments: ThresholdAdjustments
     ) async throws -> ConstrainedGenerationEngine {
-        let family = "qwen3-v151936"
         let modelURL = try ModelContainer.modelURL(filename: modelFilename)
         guard ModelContainer.modelExists(at: modelURL) else {
             throw CompletionLoadError.modelMissing(modelFilename)
         }
         let runtime = try LlamaModelRuntime(modelURL: modelURL)
+        // Resolve the tokenizer family from the model (catalog declaration, or derived from the
+        // GGUF's vocab size for an imported model) so the profile filename + family validation match
+        // what `ProfileGenerator` stamped. Catalog Qwen models keep the legacy "qwen3-v151936" family,
+        // so an existing on-disk profile for the default model still loads without a rebuild.
+        let family = ModelFamilyResolver.family(
+            forFilename: modelFilename,
+            vocabSize: runtime.metadata.vocabularySize
+        )
         let profile = try MmapAutocompleteProfile.open(
             at: try ModelContainer.profileURL(family: family),
             tokenizerVocabSize: runtime.metadata.vocabularySize,

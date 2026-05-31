@@ -8,6 +8,22 @@
 import AppKit
 import SwiftUI
 
+/// The always-present menu bar status item label. Unlike `MenuBarView` (the menu's content, which a
+/// `.menu`-style `MenuBarExtra` only instantiates when the menu opens), this label view stays alive
+/// for the app's lifetime — so it is where we observe the "open onboarding" request and can react to
+/// it at launch.
+struct MenuBarLabel: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: "text.cursor")
+            .onReceive(NotificationCenter.default.publisher(for: .keyTypeShouldOpenOnboarding)) { _ in
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: AppDelegate.onboardingWindowID)
+            }
+    }
+}
+
 struct MenuBarView: View {
     @Environment(PermissionsManager.self) private var permissions
     @Environment(ContextCaptureController.self) private var contextCapture
@@ -19,11 +35,6 @@ struct MenuBarView: View {
         @Bindable var completion = completion
 
         Group {
-            statusLine
-            completionStatusLine
-
-            Divider()
-
             Toggle("Completions enabled", isOn: $completion.completionsEnabled)
                 .disabled(!permissions.accessibility.isGranted)
 
@@ -51,37 +62,6 @@ struct MenuBarView: View {
             }
             .keyboardShortcut("q")
         }
-        .onReceive(NotificationCenter.default.publisher(for: .keyTypeShouldOpenOnboarding)) { _ in
-            openWindow(id: AppDelegate.onboardingWindowID)
-        }
     }
 
-    @ViewBuilder
-    private var statusLine: some View {
-        let ax = permissions.accessibility
-        Text(ax.isGranted
-             ? "Accessibility: granted"
-             : "Accessibility: not granted")
-        .font(.system(size: 11))
-        .foregroundStyle(ax.isGranted ? Color.secondary : Color.red)
-    }
-
-    @ViewBuilder
-    private var completionStatusLine: some View {
-        switch completion.loadState {
-        case .idle, .loading:
-            Text("Model: loading…")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        case .ready:
-            Text("Model: ready")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        case let .unavailable(message):
-            Text("Model unavailable")
-                .font(.system(size: 11))
-                .foregroundStyle(.red)
-                .help(message)
-        }
-    }
 }

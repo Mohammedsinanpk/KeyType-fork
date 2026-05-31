@@ -9,12 +9,15 @@ import ApplicationServices
 import AppKit
 import CoreGraphics
 import Foundation
+import IOKit.hid
 import Observation
 
 /// Tracks the macOS privacy permissions KeyType depends on.
 ///
 /// - Accessibility is **required**: it gates AX-based caret/text-field capture and
 ///   later synthetic keystroke injection. Without it, KeyType cannot function.
+/// - Input Monitoring is **required**: the global acceptance hotkey is a `CGEvent` session tap that
+///   listens for key-downs, which macOS gates behind Input Monitoring (listen-event) access.
 /// - Screen Recording is **optional**: enables richer context capture (window/OCR) in
 ///   future milestones. The app should run fine without it.
 @MainActor
@@ -25,7 +28,13 @@ final class PermissionsManager {
     }
 
     private(set) var accessibility = PermissionState(isGranted: false)
+    private(set) var inputMonitoring = PermissionState(isGranted: false)
     private(set) var screenRecording = PermissionState(isGranted: false)
+
+    /// Both permissions KeyType needs to deliver and accept completions are granted.
+    var requiredPermissionsGranted: Bool {
+        accessibility.isGranted && inputMonitoring.isGranted
+    }
 
     private var pollTimer: Timer?
 
@@ -60,6 +69,10 @@ final class PermissionsManager {
         if accessibility.isGranted != ax {
             accessibility = PermissionState(isGranted: ax)
         }
+        let listen = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+        if inputMonitoring.isGranted != listen {
+            inputMonitoring = PermissionState(isGranted: listen)
+        }
         let screen = CGPreflightScreenCaptureAccess()
         if screenRecording.isGranted != screen {
             screenRecording = PermissionState(isGranted: screen)
@@ -81,6 +94,15 @@ final class PermissionsManager {
         return trusted
     }
 
+    /// Pops the system Input Monitoring consent prompt (deep-links to System Settings). Returns the
+    /// current listen-event status; the real grant happens asynchronously once the user toggles it.
+    @discardableResult
+    func requestInputMonitoring() -> Bool {
+        let granted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        refresh()
+        return granted
+    }
+
     /// Triggers the standard Screen Recording consent prompt. Returns the current preflight
     /// status; the system will surface the toggle in Privacy & Security › Screen Recording.
     @discardableResult
@@ -96,8 +118,34 @@ final class PermissionsManager {
         openSettings(pane: "Privacy_Accessibility")
     }
 
+    func openInputMonitoringSettings() {
+        openSettings(pane: "Privacy_ListenEvent")
+    }
+
     func openScreenRecordingSettings() {
         openSettings(pane: "Privacy_ScreenCapture")
+    }
+
+    /// Opens System Settings › Keyboard so the user can turn off macOS's "Show inline predictive
+    /// text", which otherwise renders its own ghost text alongside KeyType's. There is no documented
+    /// deep link to that specific toggle, so this opens the Keyboard pane and the UI explains the
+    /// remaining clicks.
+    func openKeyboardSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Best-effort read of macOS's global "Show inline predictive text" default
+    /// (`NSAutomaticInlinePredictionEnabled`). Returns `nil` when the key is unset (we can't tell),
+    /// otherwise the stored boolean. Used only to show a soft hint on the onboarding step — the
+    /// step is always skippable because we cannot reliably detect this on every macOS version.
+    static func inlinePredictionDefaultEnabled() -> Bool? {
+        let key = "NSAutomaticInlinePredictionEnabled"
+        guard let global = UserDefaults(suiteName: "NSGlobalDomain"),
+              global.object(forKey: key) != nil else {
+            return nil
+        }
+        return global.bool(forKey: key)
     }
 
     private func openSettings(pane: String) {

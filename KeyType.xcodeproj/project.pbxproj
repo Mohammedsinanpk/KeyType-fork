@@ -10,6 +10,7 @@
 		20DD9A7F2FC95AB900BE1F8C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20DD9A7A2FC95AB900BE1F8C /* Assets.xcassets */; };
 		20DD9A822FC95AB900BE1F8C /* KeyTypeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DD9A7D2FC95AB900BE1F8C /* KeyTypeApp.swift */; };
 		20DD9A852FC95ABB00BE1F8C /* KeyTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DD9A832FC95ABB00BE1F8C /* KeyTypeTests.swift */; };
+		4B5450012FC9600000000091 /* OnboardingAndKeybindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000090 /* OnboardingAndKeybindTests.swift */; };
 		20DD9A892FC95ABD00BE1F8C /* KeyTypeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DD9A862FC95ABD00BE1F8C /* KeyTypeUITests.swift */; };
 		20DD9A8A2FC95ABD00BE1F8C /* KeyTypeUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DD9A872FC95ABD00BE1F8C /* KeyTypeUITestsLaunchTests.swift */; };
 		4B5450012FC9600000000001 /* AutocompleteCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000011 /* AutocompleteCore */; };
@@ -37,6 +38,11 @@
 		4B5450012FC9600000000064 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000063 /* SettingsStore.swift */; };
 		4B5450012FC9600000000066 /* WritingHistoryRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */; };
 		4B5450012FC9600000000068 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000067 /* SettingsView.swift */; };
+		4B5450012FC9600000000073 /* ModelManagement in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000071 /* ModelManagement */; };
+		4B5450012FC9600000000074 /* ModelProfileGeneration in Frameworks */ = {isa = PBXBuildFile; productRef = 4B5450012FC9600000000072 /* ModelProfileGeneration */; };
+		4B5450012FC9600000000081 /* AcceptanceShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000080 /* AcceptanceShortcut.swift */; };
+		4B5450012FC9600000000083 /* ModelSetupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000082 /* ModelSetupCoordinator.swift */; };
+		4B5450012FC9600000000085 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5450012FC9600000000084 /* KeyRecorderView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +69,7 @@
 		20DD9A7A2FC95AB900BE1F8C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		20DD9A7D2FC95AB900BE1F8C /* KeyTypeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTypeApp.swift; sourceTree = "<group>"; };
 		20DD9A832FC95ABB00BE1F8C /* KeyTypeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTypeTests.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000090 /* OnboardingAndKeybindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingAndKeybindTests.swift; sourceTree = "<group>"; };
 		20DD9A862FC95ABD00BE1F8C /* KeyTypeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTypeUITests.swift; sourceTree = "<group>"; };
 		20DD9A872FC95ABD00BE1F8C /* KeyTypeUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTypeUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		4B5450012FC960000000000B /* KeyTypeModuleGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTypeModuleGraph.swift; sourceTree = "<group>"; };
@@ -80,6 +87,9 @@
 		4B5450012FC9600000000063 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000065 /* WritingHistoryRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingHistoryRecorder.swift; sourceTree = "<group>"; };
 		4B5450012FC9600000000067 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000080 /* AcceptanceShortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptanceShortcut.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000082 /* ModelSetupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSetupCoordinator.swift; sourceTree = "<group>"; };
+		4B5450012FC9600000000084 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -93,6 +103,8 @@
 				4B5450012FC9600000000006 /* ConstrainedGeneration in Frameworks */,
 				4B5450012FC9600000000051 /* LlamaModelRuntime in Frameworks */,
 				4B5450012FC9600000000002 /* MacContextCapture in Frameworks */,
+				4B5450012FC9600000000073 /* ModelManagement in Frameworks */,
+				4B5450012FC9600000000074 /* ModelProfileGeneration in Frameworks */,
 				4B5450012FC9600000000004 /* ModelRuntime in Frameworks */,
 				4B5450012FC9600000000062 /* Personalization in Frameworks */,
 				4B5450012FC9600000000003 /* Prompting in Frameworks */,
@@ -154,6 +166,7 @@
 			isa = PBXGroup;
 			children = (
 				20DD9A832FC95ABB00BE1F8C /* KeyTypeTests.swift */,
+				4B5450012FC9600000000090 /* OnboardingAndKeybindTests.swift */,
 			);
 			path = KeyTypeTests;
 			sourceTree = "<group>";
@@ -179,6 +192,7 @@
 		20ECCAEE2FCBE7BF00005943 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				4B5450012FC9600000000084 /* KeyRecorderView.swift */,
 				4B5450012FC9600000000037 /* MenuBarView.swift */,
 				4B5450012FC9600000000035 /* OnboardingView.swift */,
 				4B5450012FC9600000000067 /* SettingsView.swift */,
@@ -189,11 +203,13 @@
 		20ECCAEF2FCBE7D700005943 /* Logic */ = {
 			isa = PBXGroup;
 			children = (
+				4B5450012FC9600000000080 /* AcceptanceShortcut.swift */,
 				4B5450012FC9600000000042 /* CompletionAcceptanceController.swift */,
 				4B5450012FC9600000000040 /* CompletionController.swift */,
 				4B5450012FC9600000000039 /* ContextCaptureController.swift */,
 				4B5450012FC9600000000044 /* FieldFontResolver.swift */,
 				4B5450012FC960000000000B /* KeyTypeModuleGraph.swift */,
+				4B5450012FC9600000000082 /* ModelSetupCoordinator.swift */,
 				4B5450012FC9600000000033 /* PermissionsManager.swift */,
 				4B5450012FC9600000000054 /* PredictionLog.swift */,
 				4B5450012FC9600000000063 /* SettingsStore.swift */,
@@ -226,6 +242,8 @@
 				4B5450012FC9600000000016 /* ConstrainedGeneration */,
 				4B5450012FC9600000000050 /* LlamaModelRuntime */,
 				4B5450012FC9600000000012 /* MacContextCapture */,
+				4B5450012FC9600000000071 /* ModelManagement */,
+				4B5450012FC9600000000072 /* ModelProfileGeneration */,
 				4B5450012FC9600000000014 /* ModelRuntime */,
 				4B5450012FC9600000000061 /* Personalization */,
 				4B5450012FC9600000000013 /* Prompting */,
@@ -314,6 +332,7 @@
 				4B5450012FC9600000000025 /* XCLocalSwiftPackageReference "Packages/CompletionUI" */,
 				4B5450012FC9600000000024 /* XCLocalSwiftPackageReference "Packages/ConstrainedGeneration" */,
 				4B5450012FC9600000000020 /* XCLocalSwiftPackageReference "Packages/MacContextCapture" */,
+				4B5450012FC9600000000070 /* XCLocalSwiftPackageReference "Packages/ModelManagement" */,
 				4B5450012FC9600000000022 /* XCLocalSwiftPackageReference "Packages/ModelRuntime" */,
 				4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */,
 				4B5450012FC9600000000021 /* XCLocalSwiftPackageReference "Packages/Prompting" */,
@@ -375,6 +394,9 @@
 				4B5450012FC9600000000064 /* SettingsStore.swift in Sources */,
 				4B5450012FC9600000000066 /* WritingHistoryRecorder.swift in Sources */,
 				4B5450012FC9600000000068 /* SettingsView.swift in Sources */,
+				4B5450012FC9600000000081 /* AcceptanceShortcut.swift in Sources */,
+				4B5450012FC9600000000083 /* ModelSetupCoordinator.swift in Sources */,
+				4B5450012FC9600000000085 /* KeyRecorderView.swift in Sources */,
 				4B5450012FC960000000000A /* KeyTypeModuleGraph.swift in Sources */,
 				20DD9A822FC95AB900BE1F8C /* KeyTypeApp.swift in Sources */,
 			);
@@ -385,6 +407,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				20DD9A852FC95ABB00BE1F8C /* KeyTypeTests.swift in Sources */,
+				4B5450012FC9600000000091 /* OnboardingAndKeybindTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -743,6 +766,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ModelRuntime;
 		};
+		4B5450012FC9600000000070 /* XCLocalSwiftPackageReference "Packages/ModelManagement" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ModelManagement;
+		};
 		4B5450012FC9600000000023 /* XCLocalSwiftPackageReference "Packages/TokenProfiles" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TokenProfiles;
@@ -824,6 +851,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4B5450012FC9600000000060 /* XCLocalSwiftPackageReference "Packages/Personalization" */;
 			productName = Personalization;
+		};
+		4B5450012FC9600000000071 /* ModelManagement */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B5450012FC9600000000070 /* XCLocalSwiftPackageReference "Packages/ModelManagement" */;
+			productName = ModelManagement;
+		};
+		4B5450012FC9600000000072 /* ModelProfileGeneration */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B5450012FC9600000000070 /* XCLocalSwiftPackageReference "Packages/ModelManagement" */;
+			productName = ModelProfileGeneration;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

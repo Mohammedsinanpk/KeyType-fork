@@ -1347,3 +1347,121 @@ text. Both are now closed:
     inline placement.
   - The overlay layer has a defensive cap for future web surfaces that briefly return field-sized
     caret bounds.
+
+## ADR-034: In-app model download + automatic ACPF generation + per-model family resolution
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Onboarding previously assumed the user had manually placed a GGUF in
+  `Application Support/KeyType/Models`, and the constrained decoder hardcoded the tokenizer family
+  `qwen3-v151936` in `CompletionController.buildEngine`. That made first-run setup opaque and made
+  any non-Qwen model (e.g. Gemma) impossible because its profile filename/validation used the wrong
+  family. The single-screen onboarding also lacked parity with the guided wizards users expect.
+- Decision: Add a `ModelManagement` SwiftPM package with a fixed catalog of five base models, a
+  `URLSessionDownloadDelegate`-backed `ModelDownloadManager` (progress, cancellation, staging-file +
+  atomic move, size + SHA-256 validation), and a `ModelFamilyResolver` that is the single source of
+  truth for a model's tokenizer family (catalog declaration, or `<base>-v<vocabSize>` derived for
+  imported GGUFs). A separate `ModelProfileGeneration` target builds `<family>.acpf.bin` in-process
+  via `ProfileBuilderCore.BuildProfile.run` over a `LlamaVocabIntrospector` once a GGUF lands. An
+  app-level `ModelSetupCoordinator` chains download → profile build and exposes one combined state;
+  a model is only `.ready` when both files exist. `CompletionController.buildEngine` now resolves the
+  family from the model file instead of hardcoding it. The single onboarding screen is replaced by a
+  stepped wizard (welcome → permissions → model → privacy → keybinds → disable macOS predictions →
+  done) with a pinned footer and per-step gating, behind a versioned `onboardingCompletedVersion`
+  gate. Acceptance hotkeys (`Tab` / `Shift+Tab`) become user-configurable via `SettingsStore`,
+  matched against the `CGEvent` tap, with a reusable `KeyRecorderView`. Input Monitoring is now a
+  required permission (the acceptance tap listens for key-downs).
+- Consequences:
+  - Keeping the default Qwen catalog entry's family equal to the legacy `qwen3-v151936` means an
+    existing on-disk profile for the default model still loads without a rebuild.
+  - The catalog's concrete Hugging Face URLs / byte sizes / SHA-256 are not yet pinned, so those
+    entries are marked `.unverified` and cannot be downloaded (only a manually-installed GGUF can be
+    prepared) until they are confirmed — we never fabricate a URL or checksum. Confirming the five
+    base GGUFs (including whether base, non-instruct Gemma "E2B/E4B" variants exist) is an open
+    follow-up.
+    - **Amended 2026-05-31 (see ADR-035):** download URLs are now pinned for all five entries and
+      they are `.available`; the base, non-instruct Gemma "E2B/E4B" question is resolved
+      (`google/gemma-4-E2B`/`E4B` are base). Byte size + SHA-256 remain unpinned.
+  - The macOS "Show inline predictive text" step relies on a Keyboard-settings deep link plus
+    written instructions; there is no documented deep link to the exact toggle, and detection of its
+    state is best-effort, so the step is always skippable.
+  - Multi-gigabyte downloads are pausable: `pause` calls `URLSessionDownloadTask.cancel(byProducingResumeData:)`
+    and surfaces a `DownloadPaused(resumeData:)` (distinct from a user cancel), which the manager stashes
+    per filename and a later `resume` feeds to `downloadTask(withResumeData:)`. A `.paused(progress:)`
+    state joins `ModelDownloadState`/`SetupState` so the wizard and Settings show a Pause/Resume/Cancel
+    control next to the percentage progress bar. If a server rejects the resume blob, the fetch falls
+    back to a fresh download (with the existing mirror fallback) rather than stranding the user.
+
+## ADR-035 — Catalog artifacts pinned to base GGUFs; Gemma E2B/E4B confirmed base
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: ADR-034 shipped `RuntimeModelCatalog` with placeholder entries marked `.unverified`
+  because no concrete GGUF URLs had been located, and it left open "whether base, non-instruct
+  Gemma 'E2B/E4B' variants exist." Both the catalog header and that consequence bullet are now
+  stale.
+- Decision: Pin a real Hugging Face download URL for every catalog entry (via a new
+  `huggingFaceURL(repo:file:)` helper) and mark all five `.available`:
+  - Qwen3.5 0.8B / 2B / 4B Base → `mradermacher/Qwen3.5-*-Base-i1-GGUF`.
+  - Gemma 4 E2B / E4B → `mradermacher/gemma-4-E{2,4}B-i1-GGUF`, which quantize the **base**
+    `google/gemma-4-E{2,4}B` (no `-it`; "i1" is imatrix, not instruct). The base variants exist,
+    resolving the ADR-034 follow-up. Both share the Gemma tokenizer (vocab 262144 → family
+    `gemma-v262144`, the value already used by the catalog).
+  - `ModelDownloadManager` transparently retries against `hf-mirror.com` when `huggingface.co` is
+    unreachable, so the catalog is authored with `huggingface.co` only.
+- Consequences:
+  - `expectedSizeBytes` / `sha256` are still `nil`, so `ModelFileValidator`'s size + checksum checks
+    are skipped — pinning those is the only remaining catalog-verification gap. The field stays `nil`
+    until a real value is recorded; we never fabricate a checksum.
+  - Gemma 4 E2B/E4B are multimodal (`gemma4`: text + vision + audio) edge/MatFormer variants;
+    KeyType uses only the text GGUF (no `mmproj`). Arch support is in the vendored llama.cpp `b9402`
+    (gemma4 landed ~2026-04-02), and the model loads standalone — KeyType's path. The known
+    llama.cpp edge-variant issues are around speculative-draft use, which KeyType does not do; a real
+    load + completion-quality check on `b9402` is still advisable before recommending them by default
+    (the Per-Layer-Embeddings forward graph has had quality questions on these variants).
+  - Gemma 4 is pure-attention with sliding-window + KV-shared layers (no recurrent/SSM state), so the
+    recurrent-safe KV-reuse rules from ADR-011/ADR-018 stay correct here — they are stricter than this
+    model needs.
+
+## ADR-036 — Import an arbitrary user-supplied GGUF
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: Model selection only exposed the curated catalog (downloaded into the Models directory).
+  Users who already have a GGUF on disk (downloaded via another tool, or a quant we don't ship) had
+  no in-app way to use it, even though the pieces to support off-catalog models already existed:
+  `ModelFamilyResolver.derivedFamily` produces a stable `<base>-v<vocabSize>` family for unknown
+  GGUFs, `ProfileGenerator` builds the ACPF from the GGUF's own tokenizer for any filename, and
+  `CompletionController.buildEngine` already resolves the family from the file rather than hardcoding.
+- Decision: Add a Settings "Use your own model → Import a GGUF…" action. `ModelSetupCoordinator`
+  gains `importModel(from:)` + an observable `ImportState`: it copies the chosen file into the Models
+  directory (App Sandbox is disabled per the entitlements, so the open-panel URL is directly
+  readable — no security-scoped bookmark), runs the same `ProfileGenerator` build the catalog path
+  uses, and on success routes through the existing `onModelReady` callback to select the model and
+  hot-reload the engine (ADR-021). The imported file then surfaces in the existing picker (which
+  lists every `.gguf` in the Models directory); a `.onChange(of: importState)` refresh is needed
+  because an off-catalog file does not move `modelSetupSignature`.
+- Consequences:
+  - Off-catalog models are unvetted: the import footer warns they may produce unexpected or
+    low-quality completions, consistent with the product principle of preferring suppression to a
+    wrong suggestion. Decode behavior still depends on the model's architecture being supported by the
+    vendored llama.cpp build.
+  - Re-importing the same filename replaces the on-disk copy and reuses the existing profile when the
+    derived family already has one, so imports are idempotent.
+  - **Compatibility gate (added 2026-05-31):** before copying anything, the import probes the file by
+    loading it with the vendored llama.cpp build at a tiny (256-token) context and freeing it
+    immediately. Loading is the authoritative check — `llama_model_load_from_file` returns NULL
+    (`LlamaRuntimeError.modelLoadFailed`; likewise `.contextInitFailed` / `.vocabUnavailable`) for a
+    GGUF whose architecture or format version the build doesn't support. On that signal the import is
+    rejected with a clear "isn't compatible with this version of … (llama.cpp)" warning and **no file
+    is copied** into the Models directory, so a bad pick can't leave a dangling, unselectable GGUF
+    behind. Probing the source first (rather than copy-then-validate) also means rejection is fast and
+    doesn't wait on a multi-gigabyte copy. The failure message prefers the typed error's
+    `CustomStringConvertible` description over `localizedDescription`, which would otherwise flatten
+    our llama/profile errors to a generic "operation couldn't be completed" string.
+  - **Failures are modal, not inline (added 2026-05-31):** import errors are surfaced through a
+    `ModelSetupCoordinator.onImportFailure` callback that `AppDelegate` renders as an app-modal
+    `NSAlert` ("Can't Use This Model") the user must explicitly dismiss — not an inline Settings
+    status line. The coordinator's `ImportState` therefore only carries `.idle`/`.preparing`
+    (progress), keeping the logic layer free of presentation; the app activates first because it is an
+    accessory (no dock icon) so the alert comes to the front.

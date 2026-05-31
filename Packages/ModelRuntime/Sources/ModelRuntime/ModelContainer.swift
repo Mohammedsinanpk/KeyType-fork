@@ -16,8 +16,8 @@ public enum ModelContainer {
     /// Bundle-style identifier used to namespace the Application Support directory.
     public static let directoryName = "KeyType"
 
-    /// Default GGUF currently being used for on-device tests.
-    public static let defaultModelFilename = "Qwen3.5-2B-Base-Q4_K_M.gguf"
+    /// Default GGUF: the recommended Qwen3.5 2B base build from the downloadable catalog.
+    public static let defaultModelFilename = "Qwen3.5-2B-Base.i1-Q4_K_M.gguf"
 
     /// `~/Library/Application Support/KeyType` (creating it lazily on demand).
     public static func containerURL(create: Bool = false) throws -> URL {

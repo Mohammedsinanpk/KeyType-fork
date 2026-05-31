@@ -14,10 +14,15 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let onboardingWindowID = "onboarding"
     static let settingsWindowID = "settings"
-    private static let hasCompletedOnboardingDefaultsKey = "KeyType.hasCompletedOnboarding"
+    /// Stores the onboarding version the user last *completed*, not a yes/no flag, so a future
+    /// revamp can re-show the wizard by bumping `currentOnboardingVersion`. An absent key reads as 0.
+    private static let onboardingCompletedVersionKey = "KeyType.onboardingCompletedVersion"
+    private static let currentOnboardingVersion = 1
 
     let permissions = PermissionsManager()
     let settings: SettingsStore
+    /// Owns model download + ACPF profile generation; shared by the onboarding wizard and Settings.
+    let modelSetup = ModelSetupCoordinator()
     // One AX tracker feeds the (debug) context capture, the live completion pipeline, and the
     // writing-history recorder.
     private let tracker: AccessibilityContextTracker
@@ -62,6 +67,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         super.init()
         acceptance.completionController = completion
+        acceptance.settings = settings
+        // When a model finishes setup (GGUF + ACPF both present), make it the selected model and
+        // reload the engine so the change takes effect without a relaunch.
+        modelSetup.onModelReady = { [weak self] filename in
+            guard let self else { return }
+            self.settings.selectedModelFilename = filename
+            self.completion.reloadModel()
+        }
+        // Import failures (an incompatible GGUF, a copy/profile error) are shown as a modal alert the
+        // user must dismiss, rather than an inline status line in Settings. See ADR-036.
+        modelSetup.onImportFailure = { message in
+            AppDelegate.presentImportFailureAlert(message)
+        }
+    }
+
+    /// Present an import failure as an app-modal `NSAlert` the user has to explicitly dismiss. The
+    /// app is an accessory (no dock icon), so we activate first to make sure the alert comes to the
+    /// front rather than appearing behind whatever the user is typing into.
+    static func presentImportFailureAlert(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Can’t Use This Model"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// One-action wipe of all on-device personal data: every stored writing sample and the local
@@ -81,8 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startObservingPermissionChanges()
 
         if shouldShowOnboardingOnLaunch {
-            // The SwiftUI scene observes this and calls `openWindow(id:)` for us.
-            requestOpenOnboarding()
+            // The always-present `MenuBarLabel` observes this and calls `openWindow(id:)`. Defer one
+            // run loop so that label view is subscribed before we post (the menu's content view is
+            // instantiated lazily and can't be relied on at launch).
+            DispatchQueue.main.async { [weak self] in
+                self?.requestOpenOnboarding()
+            }
         }
     }
 
@@ -154,14 +189,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func markOnboardingCompleted() {
-        UserDefaults.standard.set(true, forKey: Self.hasCompletedOnboardingDefaultsKey)
+        UserDefaults.standard.set(Self.currentOnboardingVersion, forKey: Self.onboardingCompletedVersionKey)
+    }
+
+    /// Clears the completion marker so the wizard re-runs on the next request. Backs the Settings
+    /// "Run setup again" control.
+    func resetOnboarding() {
+        UserDefaults.standard.removeObject(forKey: Self.onboardingCompletedVersionKey)
     }
 
     private var shouldShowOnboardingOnLaunch: Bool {
-        let defaults = UserDefaults.standard
-        let completed = defaults.bool(forKey: Self.hasCompletedOnboardingDefaultsKey)
-        // Always show on first run, or whenever Accessibility hasn't been granted yet.
-        return !completed || !permissions.accessibility.isGranted
+        let completed = UserDefaults.standard.integer(forKey: Self.onboardingCompletedVersionKey)
+        // Show on first run, after an onboarding-version bump, or whenever a required permission is
+        // missing (the user can't actually use KeyType until those are granted).
+        return completed < Self.currentOnboardingVersion || !permissions.requiredPermissionsGranted
     }
 }
 

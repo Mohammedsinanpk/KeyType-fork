@@ -58,6 +58,12 @@ final class SettingsStore {
         static let completionLength = "KeyType.settings.completionLength"
         static let selectedModelFilename = "KeyType.settings.selectedModelFilename"
         static let perAppDisabled = "KeyType.settings.perAppDisabledBundleIDs"
+        static let acceptWordKeyCode = "KeyType.settings.acceptWordKeyCode"
+        static let acceptWordModifiers = "KeyType.settings.acceptWordModifiers"
+        static let acceptWordLabel = "KeyType.settings.acceptWordLabel"
+        static let acceptFullKeyCode = "KeyType.settings.acceptFullKeyCode"
+        static let acceptFullModifiers = "KeyType.settings.acceptFullModifiers"
+        static let acceptFullLabel = "KeyType.settings.acceptFullLabel"
     }
 
     private let defaults: UserDefaults
@@ -91,6 +97,16 @@ final class SettingsStore {
         didSet { defaults.set(Array(perAppDisabled).sorted(), forKey: Key.perAppDisabled) }
     }
 
+    /// Hotkey that accepts the next word of the visible suggestion. Defaults to Tab.
+    var acceptWordShortcut: AcceptanceShortcut {
+        didSet { persist(acceptWordShortcut, keyCode: Key.acceptWordKeyCode, modifiers: Key.acceptWordModifiers, label: Key.acceptWordLabel) }
+    }
+
+    /// Hotkey that accepts the entire visible suggestion. Defaults to Shift+Tab.
+    var acceptFullShortcut: AcceptanceShortcut {
+        didSet { persist(acceptFullShortcut, keyCode: Key.acceptFullKeyCode, modifiers: Key.acceptFullModifiers, label: Key.acceptFullLabel) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.historyEnabled = defaults.bool(forKey: Key.historyEnabled)
@@ -100,6 +116,42 @@ final class SettingsStore {
             .flatMap(CompletionLength.init(rawValue:)) ?? .medium
         self.selectedModelFilename = defaults.string(forKey: Key.selectedModelFilename)
         self.perAppDisabled = Set(defaults.stringArray(forKey: Key.perAppDisabled) ?? [])
+        self.acceptWordShortcut = Self.loadShortcut(
+            defaults: defaults,
+            keyCodeKey: Key.acceptWordKeyCode,
+            modifiersKey: Key.acceptWordModifiers,
+            labelKey: Key.acceptWordLabel,
+            fallback: .defaultAcceptWord
+        )
+        self.acceptFullShortcut = Self.loadShortcut(
+            defaults: defaults,
+            keyCodeKey: Key.acceptFullKeyCode,
+            modifiersKey: Key.acceptFullModifiers,
+            labelKey: Key.acceptFullLabel,
+            fallback: .defaultAcceptFull
+        )
+    }
+
+    private func persist(_ shortcut: AcceptanceShortcut, keyCode: String, modifiers: String, label: String) {
+        defaults.set(Int(shortcut.keyCode), forKey: keyCode)
+        defaults.set(Int(shortcut.modifiers.rawValue), forKey: modifiers)
+        defaults.set(shortcut.label, forKey: label)
+    }
+
+    private static func loadShortcut(
+        defaults: UserDefaults,
+        keyCodeKey: String,
+        modifiersKey: String,
+        labelKey: String,
+        fallback: AcceptanceShortcut
+    ) -> AcceptanceShortcut {
+        // An unset key code reads as 0 from UserDefaults; treat that as "never customized" and use
+        // the factory default rather than binding acceptance to key code 0.
+        guard defaults.object(forKey: keyCodeKey) != nil else { return fallback }
+        let keyCode = Int64(defaults.integer(forKey: keyCodeKey))
+        let modifiers = AcceptanceModifierMask(rawValue: UInt8(truncatingIfNeeded: defaults.integer(forKey: modifiersKey)))
+        let label = defaults.string(forKey: labelKey) ?? fallback.label
+        return AcceptanceShortcut(keyCode: keyCode, modifiers: modifiers, label: label)
     }
 
     func setApp(_ bundleIdentifier: String, enabled: Bool) {
