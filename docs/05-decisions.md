@@ -2171,3 +2171,31 @@ text. Both are now closed:
   a retry rebuilds. The validate-on-skip path adds one O(vocab) tokenizer-digest pass when a profile
   already exists, but only on the setup/import path (never the completion hot path), so the cost is
   negligible. Behaviour is unchanged on the success path.
+
+## ADR-053 — Hide completion latency without changing candidate quality
+
+- Date: 2026-06-01
+- Status: accepted
+- Context: Release profiling showed the shipped decoder was already usually in the 25-65 ms range
+  for production-like prompts, while the app-level debounce and first-use prompt/model work could
+  add visible latency before a suggestion appeared. The quality constraint is strict: latency work
+  must not change model scoring, candidate filtering, or the final top-N suggestions.
+- Decision: Add four latency-only changes:
+  - Use an adaptive debounce in `CompletionController`: start at 50 ms, use 35 ms after a responsive
+    generation (<= 70 ms), and back off to 90 ms after slow generations (> 140 ms).
+  - Add `ConstrainedGenerationEngine.warmUp(for:)`, which runs the same policy gates and decodes the
+    request anchor/root logits without sampling or displaying text. The app uses this once after model
+    load and opportunistically for a new prompt side-context burst.
+  - Freeze optional prompt side-context sections (history samples, pasteboard text, screen text) for
+    two seconds per field/privacy key so auxiliary context does not rewrite the prompt prefix on every
+    keystroke within the same burst.
+  - Stop beam search early only when the unique, suffix-safe finalized top-N candidates strictly
+    outscore every live branch's current score. Because future token log-probabilities are never
+    positive, each live score is an upper bound on any continuation it can still produce; strict
+    comparison preserves tie ordering.
+- Consequences: Candidate generation still uses the same prompt ingredients, token sampler, policy
+  gates, suffix guard, and final ranking. Warmup never emits suggestions. Early exit is covered by
+  deterministic tests for both the locked-candidate case and the equal-score tie case, where search
+  must continue because the visible top suggestion can still change. The production latency profile
+  now shows the short append case completing in about 34 ms with two batched decode calls, while
+  medium/long/FIM cases remain in the same release-profile range as before.

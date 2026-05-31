@@ -145,6 +145,9 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
             }
 
             live = prune(nextLive)
+            if shouldStopEarly(finalized: finalized, live: live, request: request) {
+                break depthLoop
+            }
         }
 
         // Branches still alive at the depth cap are valid candidates too.
@@ -165,6 +168,22 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
         }
 
         return makeCandidates(from: surviving, mode: request.mode)
+    }
+
+    /// Pre-decodes the fixed request anchor without expanding any candidate branches. This warms
+    /// Metal kernels and seeds the runtime's anchor snapshot so a later identical completion can
+    /// start from cached root logits. It intentionally does not sample, filter, or return text.
+    public func warmUp(for request: CompletionRequest) async throws {
+        let policy = compatibilityStore.policy(for: request.context)
+        guard policy.isCompletionEnabled else { return }
+        guard policy.allowsMidLineCompletion || request.context.afterCursor.isEmpty else { return }
+        guard policy.allowsTabAcceptance else { return }
+        guard request.maxCompletionTokens > 0 else { return }
+
+        let (basePrompt, _) = try makeBasePrompt(for: request)
+        try Task.checkCancellation()
+        _ = try await runtime.anchoredLogitsBatch(anchor: basePrompt, suffixes: [[]])
+        try Task.checkCancellation()
     }
 
     // MARK: - Prompt assembly
@@ -240,6 +259,39 @@ public final class ConstrainedGenerationEngine: CompletionGenerating {
             sorted.removeLast(sorted.count - configuration.branchWidth)
         }
         return sorted
+    }
+
+    /// Future token log-probabilities are never positive, so a live branch's current score is an
+    /// upper bound for every completion it can still produce. Once the finalized top-N unique,
+    /// suffix-safe branches all strictly beat that upper bound, no later branch can change the
+    /// returned candidate set or order.
+    private func shouldStopEarly(
+        finalized: [GenerationBranch],
+        live: [GenerationBranch],
+        request: CompletionRequest
+    ) -> Bool {
+        let candidateLimit = max(0, configuration.maxCandidates)
+        guard candidateLimit > 0, !finalized.isEmpty, !live.isEmpty else { return false }
+
+        var bestByText: [String: GenerationBranch] = [:]
+        for branch in finalized {
+            guard !SuffixOverlapGuard.duplicatesSuffix(
+                completion: branch.text,
+                beforeCursor: request.context.beforeCursor,
+                afterCursor: request.context.afterCursor
+            ) else { continue }
+            if let existing = bestByText[branch.text], existing.score >= branch.score { continue }
+            bestByText[branch.text] = branch
+        }
+
+        let locked = bestByText.values.sorted { lhs, rhs in
+            lhs.score != rhs.score ? lhs.score > rhs.score : lhs.text < rhs.text
+        }
+        guard locked.count >= candidateLimit,
+              let bestLiveScore = live.map(\.score).max()
+        else { return false }
+
+        return locked[candidateLimit - 1].score > bestLiveScore
     }
 
     /// Dedupe by emitted text (best score wins), rank, and cap to `maxCandidates`.

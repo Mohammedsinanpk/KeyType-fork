@@ -51,6 +51,7 @@ final class CompletionController {
     private var engine: ConstrainedGenerationEngine?
     private var generationTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
+    private var warmupTask: Task<Void, Never>?
     private var listenerToken: UUID?
     /// Content signature of the last snapshot we acted on, so re-emitted snapshots whose text is
     /// unchanged (caret-geometry repolls) don't tear down and rebuild the overlay — that churn is
@@ -85,6 +86,8 @@ final class CompletionController {
     private var anchorContext: TextFieldContext?
     /// The most recent focused-field context seen — the live caret the suggestion is reconciled to.
     private var latestContext: TextFieldContext?
+    private var frozenSideContext: FrozenPromptSideContext?
+    private var lastGenerationLatencyMs: Double?
     /// Set when the user accepts a word with Tab: keep the *rest* of the same suggestion in place and
     /// do not regenerate, so repeated Tab presses walk through the remaining words of that one
     /// completion. Cleared once the suggestion is exhausted, the user diverges, or the overlay is torn
@@ -94,6 +97,36 @@ final class CompletionController {
     var completionsEnabled = true {
         didSet {
             if !completionsEnabled { reset() }
+        }
+    }
+
+    nonisolated static let fastDebounceNanoseconds: UInt64 = 35_000_000
+    nonisolated static let moderateDebounceNanoseconds: UInt64 = 50_000_000
+    nonisolated static let conservativeDebounceNanoseconds: UInt64 = 90_000_000
+    private static let sideContextFreezeInterval: TimeInterval = 2.0
+
+    private struct FrozenPromptSideContext {
+        var fieldKey: String
+        var historyEnabled: Bool
+        var clipboardEnabled: Bool
+        var ocrEnabled: Bool
+        var previousUserInputs: [String]
+        var pasteboardText: String?
+        var screenText: String?
+        var lastUsedAt: Date
+
+        func canReuse(
+            fieldKey: String,
+            historyEnabled: Bool,
+            clipboardEnabled: Bool,
+            ocrEnabled: Bool,
+            now: Date
+        ) -> Bool {
+            self.fieldKey == fieldKey
+                && self.historyEnabled == historyEnabled
+                && self.clipboardEnabled == clipboardEnabled
+                && self.ocrEnabled == ocrEnabled
+                && now.timeIntervalSince(lastUsedAt) <= CompletionController.sideContextFreezeInterval
         }
     }
 
@@ -147,6 +180,7 @@ final class CompletionController {
                 )
                 self.engine = engine
                 self.loadState = .ready
+                self.startStartupWarmup(engine: engine)
                 self.log.info("Completion engine ready")
             } catch {
                 self.loadState = .unavailable("\(error)")
@@ -164,6 +198,8 @@ final class CompletionController {
         let target = settings.selectedModelFilename ?? ModelContainer.defaultModelFilename
         guard target != activeModelFilename || loadState == .idle else { return }
         activeModelFilename = target
+        warmupTask?.cancel()
+        lastGenerationLatencyMs = nil
         Task {
             if let engine { await engine.shutdown() }
             engine = nil
@@ -198,6 +234,8 @@ final class CompletionController {
     /// and drop our reference so its `deinit` can't race the same teardown. See ADR-021.
     func shutdown() async {
         stop()
+        warmupTask?.cancel()
+        lastGenerationLatencyMs = nil
         loadState = .idle
         activeModelFilename = nil
         if let engine {
@@ -274,23 +312,17 @@ final class CompletionController {
         // `present`. When there is no heal the request is the plain whole-prefix continuation.
         let heal = MidWordHealing.plan(for: context)
         let promptContext = heal.map { context.replacingBeforeCursor($0.head) } ?? context
-        // Personalization, clipboard, and screen/OCR are all opt-in: only feed history when the user
-        // enabled it, only include clipboard text when that privacy switch is on, and only include
-        // OCR'd on-screen text when OCR is enabled. The OCR read is a cheap cache lookup — the actual
-        // capture happens out of band in ScreenContextController, never on this per-keystroke path.
-        let historyProvider: WritingHistoryProviding = settings.historyEnabled
-            ? history
-            : NullWritingHistoryStore()
-        let clipboardText = settings.clipboardEnabled
-            ? NSPasteboard.general.string(forType: .string)
-            : nil
-        let screenText = settings.ocrEnabled ? screenTextProvider.latestScreenText : nil
-        let promptResult = KeyTypeModuleGraph.makePrompt(
-            for: promptContext,
-            compatibilityStore: compatibilityStore,
-            history: historyProvider,
-            pasteboardText: clipboardText,
-            screenText: screenText
+        // Personalization, clipboard, and screen/OCR are all opt-in. Once a typing burst starts, the
+        // optional side sections are frozen briefly so unrelated history/clipboard/OCR updates do
+        // not rewrite the prompt prefix and destroy KV append reuse mid-burst.
+        let (sideContext, sideContextReused) = promptSideContext(for: promptContext)
+        let promptResult = KeyTypeModuleGraph.makePromptBuilder().buildPrompt(
+            context: promptContext,
+            customInstructions: policy.customInstructions,
+            previousUserInputs: sideContext.previousUserInputs,
+            pasteboardText: sideContext.pasteboardText,
+            screenText: sideContext.screenText,
+            includeEnvironmentContext: policy.includesEnvironmentContext
         )
         let requiredPrefixBytes = heal.map { Array($0.heal.utf8) } ?? []
         // The re-emitted stem consumes part of the token/width budget, so widen both by the heal's
@@ -307,14 +339,20 @@ final class CompletionController {
             maxCompletionTokens: length.maxCompletionTokens + (healSlack > 0 ? 2 : 0),
             maxDisplayWidth: length.maxDisplayWidth + healSlack
         )
+        if !sideContextReused || lastGenerationLatencyMs == nil {
+            startAnchorWarmup(engine: engine, request: request)
+        }
 
         // Debounce: coalesce rapid keystrokes, and DON'T hide the current ghost up front — we
         // transition directly old → new (or → hidden) when generation finishes, so typing updates
         // the suggestion in place instead of blinking it out and back in.
+        let debounceNanoseconds = Self.adaptiveDebounceNanoseconds(
+            lastGenerationLatencyMs: lastGenerationLatencyMs
+        )
         generationTask?.cancel()
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 90_000_000)
+            try? await Task.sleep(nanoseconds: debounceNanoseconds)
             guard !Task.isCancelled, let self else { return }
             self.generationTask = Task { [weak self] in
                 guard let self else { return }
@@ -323,6 +361,7 @@ final class CompletionController {
                     let candidates = try await engine.completions(for: request)
                     try Task.checkCancellation()
                     let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+                    self.lastGenerationLatencyMs = elapsedMs
                     self.telemetry.recordLatency(milliseconds: elapsedMs)
                     self.present(candidates, request: request, style: style)
                 } catch is CancellationError {
@@ -391,6 +430,109 @@ final class CompletionController {
         }
     }
 
+    nonisolated static func adaptiveDebounceNanoseconds(lastGenerationLatencyMs: Double?) -> UInt64 {
+        guard let latency = lastGenerationLatencyMs else { return moderateDebounceNanoseconds }
+        if latency <= 70 { return fastDebounceNanoseconds }
+        if latency <= 140 { return moderateDebounceNanoseconds }
+        return conservativeDebounceNanoseconds
+    }
+
+    private func promptSideContext(
+        for context: TextFieldContext,
+        now: Date = Date()
+    ) -> (FrozenPromptSideContext, reused: Bool) {
+        let fieldKey = Self.sideContextFieldKey(for: context)
+        if var cached = frozenSideContext,
+           cached.canReuse(
+               fieldKey: fieldKey,
+               historyEnabled: settings.historyEnabled,
+               clipboardEnabled: settings.clipboardEnabled,
+               ocrEnabled: settings.ocrEnabled,
+               now: now
+           ) {
+            cached.lastUsedAt = now
+            frozenSideContext = cached
+            return (cached, true)
+        }
+
+        let query = WritingHistoryQuery(
+            bundleIdentifier: context.target.bundleIdentifier,
+            domain: context.target.domain,
+            typingContext: context.typingContext,
+            language: context.detectedLanguage
+        )
+        let previousUserInputs = settings.historyEnabled
+            ? history.samples(for: query)
+            : []
+        let pasteboardText = settings.clipboardEnabled
+            ? NSPasteboard.general.string(forType: .string)
+            : nil
+        let screenText = settings.ocrEnabled
+            ? screenTextProvider.latestScreenText
+            : nil
+
+        let frozen = FrozenPromptSideContext(
+            fieldKey: fieldKey,
+            historyEnabled: settings.historyEnabled,
+            clipboardEnabled: settings.clipboardEnabled,
+            ocrEnabled: settings.ocrEnabled,
+            previousUserInputs: previousUserInputs,
+            pasteboardText: pasteboardText,
+            screenText: screenText,
+            lastUsedAt: now
+        )
+        frozenSideContext = frozen
+        return (frozen, false)
+    }
+
+    private nonisolated static func sideContextFieldKey(for context: TextFieldContext) -> String {
+        [
+            context.target.bundleIdentifier,
+            context.target.domain ?? "",
+            context.target.windowTitle ?? "",
+            context.placeholder ?? "",
+            context.labels.joined(separator: "\u{1F}"),
+            context.detectedLanguage ?? "",
+            context.typingContext ?? ""
+        ].joined(separator: "\u{1E}")
+    }
+
+    private func startStartupWarmup(engine: ConstrainedGenerationEngine) {
+        warmupTask?.cancel()
+        let context = TextFieldContext(
+            beforeCursor: "The",
+            target: AppTarget(bundleIdentifier: "com.pattonium.KeyType", appName: "KeyType"),
+            detectedLanguage: "en"
+        )
+        let prompt = KeyTypeModuleGraph.makePromptBuilder().buildPrompt(context: context).prompt
+        let request = CompletionRequest(
+            context: context,
+            prompt: prompt,
+            mode: .prose,
+            maxCompletionTokens: 1,
+            maxDisplayWidth: 8
+        )
+        startWarmup(engine: engine, request: request)
+    }
+
+    private func startAnchorWarmup(engine: ConstrainedGenerationEngine, request: CompletionRequest) {
+        startWarmup(engine: engine, request: request)
+    }
+
+    private func startWarmup(engine: ConstrainedGenerationEngine, request: CompletionRequest) {
+        warmupTask?.cancel()
+        warmupTask = Task { [weak self] in
+            do {
+                try Task.checkCancellation()
+                try await engine.warmUp(for: request)
+            } catch is CancellationError {
+                // Superseded by a newer focus/typing context.
+            } catch {
+                self?.log.debug("Warmup failed: \(error, privacy: .public)")
+            }
+        }
+    }
+
     /// Renders the anchored suggestion (if any) against `live`: shows the portion still ahead of the
     /// caret at the live placement, or clears everything when the user has typed past / diverged from
     /// it. The single place the overlay is shown, so display always matches the live caret.
@@ -444,8 +586,10 @@ final class CompletionController {
     private func reset() {
         debounceTask?.cancel()
         generationTask?.cancel()
+        warmupTask?.cancel()
         lastContextKey = nil
         lastCaretRect = nil
+        frozenSideContext = nil
         clearCompletion()
     }
 
@@ -494,6 +638,7 @@ final class CompletionController {
         if let typed, !typed.isEmpty, shown.hasPrefix(typed) { return }
         debounceTask?.cancel()
         generationTask?.cancel()
+        warmupTask?.cancel()
         clearCompletion()
     }
 
@@ -516,6 +661,7 @@ final class CompletionController {
         // Cancel any in-flight generation so it can't clobber the held suggestion when it returns.
         debounceTask?.cancel()
         generationTask?.cancel()
+        warmupTask?.cancel()
         latestContext = context.replacingBeforeCursor(context.beforeCursor + head)
         visibleCandidate = rest.isEmpty ? nil : CompletionCandidate(text: rest, mode: .prose)
         insert(text: head, context: context, keepingAnchor: true)

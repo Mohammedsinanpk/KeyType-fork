@@ -90,6 +90,48 @@ final class ConstrainedGenerationEngineTests: XCTestCase {
         TokenLogit(tokenID: id, logit: value)
     }
 
+    private final class CountingBatchRuntime: LocalModelRuntime {
+        let metadata: ModelMetadata
+        let tokenizer: ModelTokenizing = UTF8FallbackTokenizer()
+        private let logitsByPath: [[TokenID]: [TokenLogit]]
+        private var currentTokens: [TokenID] = []
+        private(set) var batchCalls = 0
+
+        init(
+            logitsByPath: [[TokenID]: [TokenLogit]],
+            vocabularySize: Int = ConstrainedGenerationEngineTests.testVocabSize
+        ) {
+            self.logitsByPath = logitsByPath
+            self.metadata = ModelMetadata(
+                identifier: "counting-batch",
+                family: "stub",
+                vocabularySize: vocabularySize,
+                contextLength: 4096
+            )
+        }
+
+        func prepare(promptTokens: [TokenID]) async throws {
+            currentTokens = promptTokens
+        }
+
+        func logitsForNextToken() async throws -> [TokenLogit] {
+            logitsByPath[currentTokens] ?? []
+        }
+
+        func decodeNext(tokenID: TokenID) async throws {
+            currentTokens.append(tokenID)
+        }
+
+        func resetKVCache() async {
+            currentTokens = []
+        }
+
+        func anchoredLogitsBatch(anchor: [TokenID], suffixes: [[TokenID]]) async throws -> [[TokenLogit]] {
+            batchCalls += 1
+            return suffixes.map { logitsByPath[anchor + $0] ?? [] }
+        }
+    }
+
     // MARK: - Multi-branch search
 
     func testMultiBranchReturnsRankedCandidateSet() async throws {
@@ -125,6 +167,44 @@ final class ConstrainedGenerationEngineTests: XCTestCase {
         let candidates = try await engine.completions(for: request(maxTokens: 2))
 
         XCTAssertEqual(candidates.map(\.text), ["good"])
+    }
+
+    func testEarlyExitKeepsLockedTopCandidateWithoutDeeperDecode() async throws {
+        let profile = profile([
+            record(1, " done.", flags: .sentenceEnd),
+            record(2, " maybe"),
+            record(3, " later.")
+        ])
+        let runtime = CountingBatchRuntime(logitsByPath: [
+            []: [logit(1, 10), logit(2, 0)],
+            [2]: [logit(3, 10)]
+        ])
+        let config = DecodingConfiguration(branchWidth: 2, maxCandidates: 1)
+        let engine = ConstrainedGenerationEngine(runtime: runtime, profile: profile, configuration: config)
+
+        let candidates = try await engine.completions(for: request(maxTokens: 3))
+
+        XCTAssertEqual(candidates.map(\.text), [" done."])
+        XCTAssertEqual(runtime.batchCalls, 1, "a locked top candidate should skip deeper beam work")
+    }
+
+    func testEarlyExitDoesNotStopWhenLiveBranchCanTieFinalizedCandidate() async throws {
+        let profile = profile([
+            record(1, " zzz.", flags: .sentenceEnd),
+            record(2, " a"),
+            record(3, "aa.", flags: .sentenceEnd)
+        ])
+        let runtime = CountingBatchRuntime(logitsByPath: [
+            []: [logit(1, 0), logit(2, 0)],
+            [2]: [logit(3, 10)]
+        ])
+        let config = DecodingConfiguration(branchWidth: 2, maxCandidates: 1)
+        let engine = ConstrainedGenerationEngine(runtime: runtime, profile: profile, configuration: config)
+
+        let candidates = try await engine.completions(for: request(maxTokens: 2))
+
+        XCTAssertEqual(candidates.map(\.text), [" aaa."])
+        XCTAssertEqual(runtime.batchCalls, 2, "ties must continue because the final text order can still change")
     }
 
     func testRelativeCutoffPrunesWeakBranch() async throws {

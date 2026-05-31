@@ -10,10 +10,16 @@ import Testing
 
 struct KeyTypeTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+    @Test func adaptiveDebounceUsesFastPathAfterResponsiveGeneration() {
+        #expect(CompletionController.adaptiveDebounceNanoseconds(lastGenerationLatencyMs: 35) == 35_000_000)
+    }
+
+    @Test func adaptiveDebounceKeepsConservativeDelayAfterSlowGeneration() {
+        #expect(CompletionController.adaptiveDebounceNanoseconds(lastGenerationLatencyMs: 180) == 90_000_000)
+    }
+
+    @Test func adaptiveDebounceStartsAtModerateDelayBeforeTelemetry() {
+        #expect(CompletionController.adaptiveDebounceNanoseconds(lastGenerationLatencyMs: nil) == 50_000_000)
     }
 
 }
