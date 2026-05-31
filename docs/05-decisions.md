@@ -1575,3 +1575,54 @@ text. Both are now closed:
     that source.
   - The marker constant lives in `AutocompleteCore` (a plain `Int64`, no AppKit/CoreGraphics
     dependency) so both the TextInsertion package and the app/key-tap layers share one definition.
+
+## ADR-040 — On-screen text (OCR) context via focused-window capture
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: The prompt builder has always reserved a `[Screen context]` section and `makePrompt` plumbs
+  a `screenText:` argument, but nothing produced it — `CompletionController` always passed `nil`
+  ("OCR/screen is a future source"). The off-by-default `ocrEnabled` switch and the optional Screen
+  Recording permission existed (ADR-023, M0) without a capture path. The remaining work was to
+  actually capture and OCR on-screen text and feed it in, without regressing the per-keystroke
+  latency budget or the privacy posture.
+- Decision: Capture the **focused app window** (not the whole display, not a caret crop) via
+  **ScreenCaptureKit** (`SCScreenshotManager.captureImage`, macOS 14+), OCR it with **Vision**
+  (`VNRecognizeTextRequest`, `.fast`, language correction off), and feed the cleaned text into the
+  existing `[Screen context]` section. The focused field's own text is already captured via AX, so
+  window OCR adds the *surrounding* on-screen text (other panels, a referenced doc, headers).
+  - **Cache, never on the typing path.** OCR costs tens-to-hundreds of ms, so it cannot run per
+    keystroke. A new `ScreenTextProviding` protocol (in `AutocompleteCore`, mirroring
+    `WritingHistoryProviding`) exposes a cheap synchronous read of the *last* OCR result.
+    `WindowOCRCaptureEngine` (`MacContextCapture`, `@MainActor`) holds that cache and refreshes it
+    out of band; the heavy capture+OCR runs off the main actor inside a `Sendable` capturer seam
+    (`ScreenWindowTextCapturing`), so tests can inject a fake. `CompletionController` only reads
+    `latestScreenText` when `ocrEnabled` — exactly the clipboard opt-in pattern.
+  - **Refresh cadence:** on focus/window change (driven by the existing AX tracker, keyed on
+    bundle id + window title so per-keystroke re-emits don't thrash OCR) plus a slow ~4 s periodic
+    timer so a still-focused window tracks slow on-screen changes.
+  - **Window selection** is a pure, SCK-free helper (`ScreenWindowSelector`) over a value-type
+    `ScreenWindowCandidate`: match the focused app's pid, skip tiny windows, prefer on-screen /
+    normal-layer / largest. Kept pure so it (and the OCR text cleanup/length cap) are unit-tested
+    without a live display; the live SCK/Vision call needs permission and isn't unit-tested.
+  - **Privacy gating** (the screen *read* is the sensitive act, gated at least as tightly as
+    completion display): `ScreenContextController` (app target, owns lifecycle + triggers) captures
+    only when `ocrEnabled` AND Screen Recording is granted AND the field is non-secure
+    (`isSecureTextEntry`/`isPasswordField`/`isPasswordManagerContext`) AND the app's
+    `CompletionPolicy.isCompletionEnabled` AND not user-disabled per-app AND not KeyType itself.
+    `AppDelegate.syncContextCaptureWithPermission()` starts/stops it (1 Hz) so toggling the switch or
+    granting permission takes effect within ~1 s; it is also paused around the GGUF import panel like
+    the rest of the AX pipeline. Enabling OCR in Settings without Screen Recording now pops the system
+    prompt and deep-links to the pane rather than silently doing nothing.
+- Consequences:
+  - Lives in the already-linked `MacContextCapture` package (it *is* the context-capture package and
+    already imports AppKit/CoreGraphics), so no `.xcodeproj` package-product changes were needed;
+    ScreenCaptureKit/Vision are auto-linked system frameworks. App Sandbox is already disabled
+    (ADR-005) and Screen Recording is handled by TCC, so no new Info.plist usage key.
+  - Window OCR overlaps somewhat with the field's own AX-captured text; acceptable for v1. A later
+    refinement could subtract lines matching `beforeCursor`/`afterCursor`. Raw OCR is capped (40
+    lines / 2000 chars) before the section's token budget trims it further.
+  - New tests cover the pure pieces (`ScreenWindowSelectorTests`, `ScreenTextOCRTests`) and the
+    engine's caching/clear via a fake capturer (`WindowOCRCaptureEngineTests`), plus the provider
+    stubs in `AutocompleteCore` (`ScreenTextProvidingTests`). `swift build`/`swift test` stay green
+    for both touched packages.

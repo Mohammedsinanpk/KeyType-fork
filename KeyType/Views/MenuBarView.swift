@@ -26,19 +26,14 @@ struct MenuBarLabel: View {
 
 struct MenuBarView: View {
     @Environment(PermissionsManager.self) private var permissions
-    @Environment(ContextCaptureController.self) private var contextCapture
     @Environment(CompletionController.self) private var completion
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        @Bindable var contextCapture = contextCapture
         @Bindable var completion = completion
 
         Group {
             Toggle("Completions enabled", isOn: $completion.completionsEnabled)
-                .disabled(!permissions.accessibility.isGranted)
-
-            Toggle("Show caret debug overlay", isOn: $contextCapture.debugOverlayEnabled)
                 .disabled(!permissions.accessibility.isGranted)
 
             Divider()

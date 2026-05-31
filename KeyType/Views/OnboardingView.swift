@@ -196,7 +196,7 @@ struct OnboardingView: View {
             PermissionCard(
                 title: "Screen Recording",
                 requirement: .optional,
-                explanation: "Optional. Enables on-screen text (OCR) context in a future update. KeyType works without it.",
+                explanation: "Optional. Lets KeyType read on-screen text (OCR) from the focused window as extra context, when you enable it in Privacy. KeyType works without it.",
                 isGranted: permissions.screenRecording.isGranted
             ) {
                 if !permissions.screenRecording.isGranted { _ = permissions.requestScreenRecording() }
@@ -249,7 +249,7 @@ struct OnboardingView: View {
             )
             ToggleCard(
                 title: "Use on-screen text (OCR) as context",
-                detail: "Reads nearby visible text when Screen Recording is granted.",
+                detail: "Reads visible text from the focused window. Requires Screen Recording permission.",
                 isOn: $settings.ocrEnabled
             )
         }

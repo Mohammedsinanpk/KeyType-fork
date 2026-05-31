@@ -1,0 +1,37 @@
+//
+//  ShortcutsSettingsView.swift
+//  KeyType
+//
+//  The "Shortcuts" Settings pane: the keys used to accept a suggestion. Split out of SettingsView so
+//  each sidebar category lives in its own file.
+//
+
+import SwiftUI
+
+struct ShortcutsSettingsView: View {
+    @Bindable var settings: SettingsStore
+
+    var body: some View {
+        Form {
+            Section("Acceptance keys") {
+                KeyRecorderView(
+                    title: "Accept word",
+                    subtitle: "Inserts the next word of the suggestion.",
+                    shortcut: settings.acceptWordShortcut,
+                    onChange: { settings.acceptWordShortcut = $0 },
+                    onReset: settings.acceptWordShortcut != .defaultAcceptWord
+                        ? { settings.acceptWordShortcut = .defaultAcceptWord } : nil
+                )
+                KeyRecorderView(
+                    title: "Accept entire suggestion",
+                    subtitle: "Inserts the whole suggestion at once.",
+                    shortcut: settings.acceptFullShortcut,
+                    onChange: { settings.acceptFullShortcut = $0 },
+                    onReset: settings.acceptFullShortcut != .defaultAcceptFull
+                        ? { settings.acceptFullShortcut = .defaultAcceptFull } : nil
+                )
+            }
+        }
+        .formStyle(.grouped)
+    }
+}

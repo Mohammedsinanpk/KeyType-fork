@@ -38,6 +38,8 @@ struct KeyTypeApp: App {
                 settings: appDelegate.settings,
                 telemetry: appDelegate.telemetry,
                 modelSetup: appDelegate.modelSetup,
+                contextCapture: appDelegate.contextCapture,
+                permissions: appDelegate.permissions,
                 clearPersonalData: { appDelegate.clearAllPersonalData() },
                 runSetupAgain: {
                     appDelegate.resetOnboarding()

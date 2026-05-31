@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let onboardingCompletedVersionKey = "KeyType.onboardingCompletedVersion"
     private static let currentOnboardingVersion = 1
 
-    let permissions = PermissionsManager()
+    let permissions: PermissionsManager
     let settings: SettingsStore
     /// Owns model download + ACPF profile generation; shared by the onboarding wizard and Settings.
     let modelSetup = ModelSetupCoordinator()
@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let history: WritingHistoryStoring
     let telemetry: CompletionTelemetryStore
     let contextCapture: ContextCaptureController
+    let screenContext: ScreenContextController
     let completion: CompletionController
     let historyRecorder: WritingHistoryRecorder
     private let acceptance = CompletionAcceptanceController()
@@ -46,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isPresentingImportPanel = false
 
     override init() {
+        let permissions = PermissionsManager()
+        self.permissions = permissions
         let tracker = AccessibilityContextTracker()
         self.tracker = tracker
         let settings = SettingsStore()
@@ -58,10 +61,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             userDisabledBundleIdentifiers: settings.perAppDisabled
         )
         self.contextCapture = ContextCaptureController(tracker: tracker)
+        let screenContext = ScreenContextController(
+            tracker: tracker,
+            settings: settings,
+            permissions: permissions,
+            compatibilityStore: compatibilityStore
+        )
+        self.screenContext = screenContext
         self.completion = CompletionController(
             tracker: tracker,
             settings: settings,
             history: history,
+            screenTextProvider: screenContext.screenTextProvider,
             telemetry: telemetry,
             compatibilityStore: compatibilityStore
         )
@@ -155,6 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             historyRecorder.stop()
             acceptance.stop()
         }
+        // OCR screen capture has its own opt-in switch and permission on top of Accessibility. Polled
+        // here (1 Hz) so flipping the Settings toggle or granting Screen Recording takes effect within
+        // ~1 s without a relaunch. See ADR-040.
+        if permissions.accessibility.isGranted, settings.ocrEnabled, permissions.screenRecording.isGranted {
+            screenContext.start()
+        } else {
+            screenContext.stop()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -217,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         completion.stop()
         historyRecorder.stop()
         acceptance.stop()
+        screenContext.stop()
 
         NSApp.activate(ignoringOtherApps: true)
         // `begin` (not `runModal`) keeps the main run loop turning while the panel is up; combined

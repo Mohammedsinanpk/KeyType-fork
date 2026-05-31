@@ -39,6 +39,7 @@ final class CompletionController {
     private let compatibilityStore: AppCompatibilityStore
     private let settings: SettingsStore
     private let history: WritingHistoryStoring
+    private let screenTextProvider: ScreenTextProviding
     private let telemetry: CompletionTelemetryStore
     private let presenter: InlineGhostTextPresenter
     private let placementResolver: OverlayPlacementResolver
@@ -100,12 +101,14 @@ final class CompletionController {
         tracker: AccessibilityContextTracker,
         settings: SettingsStore,
         history: WritingHistoryStoring = NullWritingHistoryStore(),
+        screenTextProvider: ScreenTextProviding = NullScreenTextProvider(),
         telemetry: CompletionTelemetryStore = CompletionTelemetryStore(url: nil),
         compatibilityStore: AppCompatibilityStore = KeyTypeModuleGraph.makeCompatibilityStore()
     ) {
         self.tracker = tracker
         self.settings = settings
         self.history = history
+        self.screenTextProvider = screenTextProvider
         self.telemetry = telemetry
         self.compatibilityStore = compatibilityStore
         self.presenter = InlineGhostTextPresenter()
@@ -271,19 +274,23 @@ final class CompletionController {
         // `present`. When there is no heal the request is the plain whole-prefix continuation.
         let heal = MidWordHealing.plan(for: context)
         let promptContext = heal.map { context.replacingBeforeCursor($0.head) } ?? context
-        // Personalization + clipboard are opt-in: only feed history when the user enabled it, and
-        // only include clipboard text when that privacy switch is on. OCR/screen is a future source.
+        // Personalization, clipboard, and screen/OCR are all opt-in: only feed history when the user
+        // enabled it, only include clipboard text when that privacy switch is on, and only include
+        // OCR'd on-screen text when OCR is enabled. The OCR read is a cheap cache lookup — the actual
+        // capture happens out of band in ScreenContextController, never on this per-keystroke path.
         let historyProvider: WritingHistoryProviding = settings.historyEnabled
             ? history
             : NullWritingHistoryStore()
         let clipboardText = settings.clipboardEnabled
             ? NSPasteboard.general.string(forType: .string)
             : nil
+        let screenText = settings.ocrEnabled ? screenTextProvider.latestScreenText : nil
         let promptResult = KeyTypeModuleGraph.makePrompt(
             for: promptContext,
             compatibilityStore: compatibilityStore,
             history: historyProvider,
-            pasteboardText: clipboardText
+            pasteboardText: clipboardText,
+            screenText: screenText
         )
         let requiredPrefixBytes = heal.map { Array($0.heal.utf8) } ?? []
         // The re-emitted stem consumes part of the token/width budget, so widen both by the heal's
