@@ -103,9 +103,6 @@ struct SettingsView: View {
             // Honor the "takes effect immediately" promise: a new selection flushes the resident
             // model + KV cache and reloads from the chosen GGUF without a relaunch (see ADR-021).
             .onChange(of: settings.wrappedValue.selectedModelFilename) { reloadModel() }
-            Text("Selecting a downloaded model takes effect immediately.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
 
         Section("Available models") {

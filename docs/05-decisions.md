@@ -1473,4 +1473,105 @@ text. Both are now closed:
     panel, so they deadlock and the app hangs (reproduced as "hangs on the file picker"). The fix
     stops `contextCapture` / `completion` / `historyRecorder` / `acceptance` before showing the panel,
     presents it with `begin` (keeps the run loop turning) rather than `runModal`, and restores the
-    pipeline via `syncContextCaptureWithPermission()` in the completion handler.
+    pipeline via `syncContextCaptureWithPermission()` in the completion handler. Critically, an
+    `isPresentingImportPanel` latch makes that sync a no-op while the panel is open: the AX pipeline is
+    re-armed once a second by the permission-poll timer, which (running in `.common` run-loop modes)
+    keeps firing while the panel is up and would otherwise restart the tracker mid-panel and re-trigger
+    the deadlock — the reason an earlier "just stop the controllers" attempt still hung.
+
+## ADR-037 — Dismiss stale completions from the key tap, not just the AX snapshot
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: A shown suggestion is only re-evaluated when the next focused-field snapshot arrives, which
+  is driven by AX `kAXValueChangedNotification` → `refreshSoon()` (a 20 ms debounce) → `refreshNow()`
+  → `CompletionController.handle`, where `SuggestionAnchor.remaining` clears it once the live caret
+  diverges. That path is correct but *late*: AX value-changed notifications lag the keystroke by a
+  variable amount (often tens to hundreds of ms depending on the app), so after the user types a
+  character that diverges from the suggestion the now-outdated ghost text visibly lingers for a beat
+  before the snapshot lands and clears it. The product principle is to prefer suppression to a wrong
+  suggestion, and a stale completion reads as a wrong one.
+- Decision: Reuse the existing global key tap (`CompletionAcceptanceController`, which already sees
+  every `keyDown` synchronously) to dismiss eagerly. For any key-down that is not a consumed accept
+  shortcut, it calls `CompletionController.dismissStaleCompletion(typedCharacters:)` *before* the AX
+  snapshot for that key exists. The controller keeps the suggestion only when the typed text is a
+  prefix of the visible ghost text (the user is typing the suggestion — let the AX pipeline shrink it
+  in place, preserving the no-flicker "transition in place" behavior); for anything else it cancels
+  the in-flight debounce/generation tasks and clears immediately. The tap derives the typed text via
+  `keyboardGetUnicodeString`, returning `nil` (→ always dismiss) for ⌘/⌃ combos and control/navigation
+  keys (return, tab, delete, escape, the 0xF700–0xF8FF private-use arrow/function range) so those
+  never accidentally match the suggestion's first character.
+- Consequences:
+  - Divergent keystrokes, deletions, caret moves, and shortcuts drop the ghost text on the same run
+    loop turn as the key, independent of how slowly the target app reports AX changes. The AX-driven
+    `handle`/`SuggestionAnchor` path stays the source of truth and still runs afterward (regenerating a
+    fresh suggestion), so this is a latency optimization layered on top, not a replacement.
+  - Cancelling the in-flight generation on divergence also closes a small race where a result computed
+    for the *previous* caret could `present()` and re-show a stale suggestion in the gap between the
+    tap dismissal and the next snapshot.
+  - The match check is a plain `hasPrefix` on the visible remainder, mirroring `SuggestionAnchor`'s
+    own prefix-extension rule, so the keep/dismiss decision here can't disagree with what the snapshot
+    pipeline would conclude a moment later.
+  - `keyboardGetUnicodeString` is now called from the session tap as well as the WeChat fallback tap;
+    both already existed, and the dead-key/composition caveat is unchanged.
+
+## ADR-038 — Trailing punctuation is a separate Tab unit
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: `NextWordSplitter` (Tab word-by-word acceptance, ADR-016) defined the "next word" as
+  everything up to where the *second* ICU word begins, so a word's trailing punctuation travelled with
+  it. ICU's `.byWords` enumeration doesn't emit punctuation as its own substring, so a completion like
+  `"esses."` segmented to a single word and was taken wholesale — one Tab inserted `"esses."` including
+  the full stop. The user wants to confirm sentence/clause punctuation deliberately: the word first,
+  the punctuation on a separate Tab.
+- Decision: Make a run of separable punctuation its own accept unit. `split` now first checks whether
+  the string begins (after any leading whitespace) with separable punctuation; if so the head is that
+  punctuation run plus the whitespace trailing it (so the leftover `"."`, or `", today"`, is accepted
+  as `"."` / `", "`). Otherwise it finds the first ICU word and extends the head through the word's
+  trailing whitespace but stops at the first non-whitespace character — which is exactly the start of
+  either the next word (unchanged behaviour) or a punctuation run (now split off). The separable set is
+  `. , ; : ! ?` plus the common full-width CJK forms (`。，、；：！？`); a run of them (e.g. `"?!"`,
+  `"…"`) is one unit, not one Tab per mark.
+- Consequences:
+  - `"esses."` → Tab inserts `"esses"`, then `"."`; `"world, today"` → `"world"`, then `", "`, then
+    `"today"`. Plain whitespace separators are unaffected (a trailing space still travels with its
+    word), so existing Latin/CJK word-walking is unchanged.
+  - The change is isolated to `AutocompleteCore`; `CompletionController.acceptNextWord` already loops
+    `split` over the shrinking remainder via the anchor, so it walks the new punctuation units with no
+    controller change. ICU segments CJK character-by-character in practice, which is orthogonal — the
+    punctuation still detaches because the head stops at the first non-whitespace, non-word boundary.
+  - Apostrophes/hyphens inside words (e.g. `"don't"`, `"well-known"`) are deliberately *not* in the
+    separable set, so contractions and hyphenated words are still accepted as one word.
+
+## ADR-039 — Tag synthesized insertion events so our own key taps ignore them
+
+- Date: 2026-05-31
+- Status: accepted
+- Context: ADR-037 made the acceptance key tap dismiss a visible suggestion on any non-accept
+  key-down. But KeyType inserts an accepted word by synthesizing its own `CGEvent`s —
+  `CGEventKeystrokeSynthesizer` posts `⌘V` for the pasteboard strategies and Unicode key events for
+  the injection strategies, all via `post(tap: .cghidEventTap)`. Those events are injected below the
+  session tap and therefore flow back up through it. The dismissal logic then saw them as the user
+  pressing a divergent key (the `⌘V` carries a command modifier → treated as non-text → dismiss;
+  injected characters don't prefix-match the held remainder → dismiss), so during Tab word-by-word
+  acceptance the held remainder (e.g. `"I'm"` after accepting `"that"`) was cleared the instant the
+  inserted word's keystroke arrived — Tab appeared to "dismiss" the completion instead of advancing
+  through it.
+- Decision: Stamp KeyType's synthesized events with a sentinel. `CGEventKeystrokeSynthesizer` sets
+  `source.userData = SynthesizedEventMarker.userData` (a new shared constant in `AutocompleteCore`),
+  so every event it posts carries that value in the `eventSourceUserData` field. The acceptance tap
+  (`CompletionAcceptanceController.process`) checks that field first and passes such events straight
+  through with no side effects — neither accept nor dismiss. The WeChat fallback key tap in
+  `MacContextCapture` gets the same guard so our injected keystrokes aren't double-counted into its
+  buffer (the AX field text already reflects them).
+- Consequences:
+  - Restores word-by-word Tab: pressing Tab inserts the next word, the AX-driven snapshot re-pins the
+    shrinking remainder to the new caret, and the next Tab accepts the following word — exactly the
+    pre-ADR-037 acceptance behaviour, now with ADR-037's eager dismissal still applying to *genuine*
+    user keystrokes.
+  - This is the canonical "ignore my own synthetic events" pattern; it relies on `eventSourceUserData`
+    surviving from the synthesizer's `CGEventSource` to the tap, which it does for events posted from
+    that source.
+  - The marker constant lives in `AutocompleteCore` (a plain `Int64`, no AppKit/CoreGraphics
+    dependency) so both the TextInsertion package and the app/key-tap layers share one definition.

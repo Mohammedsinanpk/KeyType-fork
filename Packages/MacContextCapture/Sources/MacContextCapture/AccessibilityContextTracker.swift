@@ -337,6 +337,11 @@ public final class AccessibilityContextTracker: NSObject {
 
     private func handleFallbackKeyEvent(type: CGEventType, event: CGEvent) {
         guard type == .keyDown else { return }
+        // Don't fold KeyType's own synthesized insertion keystrokes into the fallback buffer; the real
+        // field text already reflects them, so counting them too would double up. See ADR-039.
+        guard event.getIntegerValueField(.eventSourceUserData) != SynthesizedEventMarker.userData else {
+            return
+        }
         guard frontmostAppTarget().bundleIdentifier == WeChatFallbackTextContext.bundleIdentifier else {
             fallbackBuffer.reset()
             return

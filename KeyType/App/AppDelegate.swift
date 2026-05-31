@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set once the user has confirmed quitting and the async model teardown is under way, so the
     /// confirmation alert isn't shown twice and `applicationShouldTerminate` doesn't re-prompt.
     private var isTerminating = false
+    /// True while the GGUF import open panel is on screen. The AX/keyboard pipeline must stay fully
+    /// stopped for the panel's lifetime (its synchronous AX reads deadlock against the panel), so
+    /// `syncContextCaptureWithPermission()` is suppressed — otherwise the 1 Hz permission timer would
+    /// restart the tracker mid-panel and re-trigger the hang.
+    private var isPresentingImportPanel = false
 
     override init() {
         let tracker = AccessibilityContextTracker()
@@ -137,6 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func syncContextCaptureWithPermission() {
+        // Don't resurrect the AX pipeline while the import panel is up — see `isPresentingImportPanel`.
+        guard !isPresentingImportPanel else { return }
         if permissions.accessibility.isGranted {
             contextCapture.start()
             completion.start()
@@ -203,7 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.prompt = "Import"
         panel.message = "Choose a GGUF model file to import."
 
-        // Stop everything that reads AX or taps the keyboard before the panel appears.
+        // Stop everything that reads AX or taps the keyboard before the panel appears, and latch the
+        // flag so the 1 Hz permission timer can't restart any of it while the panel is up.
+        isPresentingImportPanel = true
         contextCapture.stop()
         completion.stop()
         historyRecorder.stop()
@@ -214,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with the paused AX pipeline this is what stops the hang.
         panel.begin { [weak self] response in
             guard let self else { return }
+            self.isPresentingImportPanel = false
             self.syncContextCaptureWithPermission()
             guard response == .OK, let url = panel.url else { return }
             self.modelSetup.importModel(from: url)

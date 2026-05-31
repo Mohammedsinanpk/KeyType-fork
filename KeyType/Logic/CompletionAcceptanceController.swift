@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import AutocompleteCore
 import CoreGraphics
 import os
 
@@ -84,6 +85,13 @@ final class CompletionAcceptanceController {
 
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
+        // Ignore the keystrokes KeyType synthesizes for insertion (⌘V / injected text). They flow back
+        // up through this session tap and would otherwise look like the user diverging — dismissing the
+        // held suggestion mid word-by-word acceptance. See ADR-039.
+        if event.getIntegerValueField(.eventSourceUserData) == SynthesizedEventMarker.userData {
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
 
@@ -94,19 +102,51 @@ final class CompletionAcceptanceController {
         // modifier (Shift+Tab vs Tab), so checking the more specific binding first is required.
         let matchesFull = acceptFull.matches(keyCode: keyCode, flags: flags)
         let matchesWord = acceptWord.matches(keyCode: keyCode, flags: flags)
-        guard matchesFull || matchesWord else {
-            return Unmanaged.passUnretained(event)
+
+        if matchesFull || matchesWord,
+           let controller = completionController, controller.canAcceptCompletion {
+            if matchesFull {
+                controller.acceptFullCompletion()
+            } else {
+                controller.acceptNextWord()
+            }
+            return nil // consume — the key accepted the completion instead of its native action
         }
 
-        guard let controller = completionController, controller.canAcceptCompletion else {
-            return Unmanaged.passUnretained(event) // nothing to accept → native key behaviour
-        }
+        // Any other key-down (including an accept key with nothing to accept) is about to mutate the
+        // field text or move the caret, which makes a visible suggestion stale. Dismiss it now rather
+        // than waiting for the slower AX value-changed snapshot — unless the user is typing the
+        // suggested characters, in which case the controller keeps it and lets the pipeline shrink it
+        // in place. See ADR-037.
+        completionController?.dismissStaleCompletion(
+            typedCharacters: typedText(keyCode: keyCode, flags: flags, event: event)
+        )
+        return Unmanaged.passUnretained(event)
+    }
 
-        if matchesFull {
-            controller.acceptFullCompletion()
-        } else {
-            controller.acceptNextWord()
+    /// The plain text a key inserts, used to tell "the user is typing the suggestion" from a divergent
+    /// key. Returns `nil` for keys that don't insert plain text — ⌘/⌃-modified combos and control or
+    /// navigation keys (return, tab, delete, escape, arrows/function keys) — so those always dismiss
+    /// rather than accidentally matching the suggestion's first character.
+    private func typedText(keyCode: Int64, flags: CGEventFlags, event: CGEvent) -> String? {
+        if flags.contains(.maskCommand) || flags.contains(.maskControl) {
+            return nil
         }
-        return nil // consume — the key accepted the completion instead of its native action
+        var chars = [UniChar](repeating: 0, count: 8)
+        var length = 0
+        event.keyboardGetUnicodeString(
+            maxStringLength: chars.count,
+            actualStringLength: &length,
+            unicodeString: &chars
+        )
+        guard length > 0 else { return nil }
+        let text = String(utf16CodeUnits: chars, count: length)
+        guard let scalar = text.unicodeScalars.first else { return nil }
+        // C0 controls (return, tab, delete, escape…), the DEL byte, and AppKit's private-use range for
+        // arrow/function keys are not real text input.
+        if scalar.value < 0x20 || scalar.value == 0x7F || (0xF700...0xF8FF).contains(scalar.value) {
+            return nil
+        }
+        return text
     }
 }

@@ -453,6 +453,25 @@ final class CompletionController {
         return compatibilityStore.policy(for: context).allowsTabAcceptance
     }
 
+    /// Synchronously dismiss the on-screen suggestion when a just-pressed key makes it stale, *before*
+    /// the AX `value-changed` snapshot for that keystroke arrives. Driven by the global key tap, which
+    /// sees every key-down immediately; the AX pipeline that would otherwise clear a diverged
+    /// suggestion lags behind by the debounce plus the app's notification latency, so without this the
+    /// outdated ghost text visibly lingers for a beat after each key. See ADR-037.
+    ///
+    /// `typed` is the plain text the key inserts, or `nil` for keys that don't insert plain text
+    /// (delete, arrows, return, escape, ⌘/⌃ shortcuts). When the user is typing the suggested
+    /// characters the suggestion is kept so the AX pipeline can shrink it in place (no flicker);
+    /// anything else clears it now and abandons any in-flight generation, so a result returning for the
+    /// previous caret can't re-show the stale suggestion.
+    func dismissStaleCompletion(typedCharacters typed: String?) {
+        guard let shown = visibleCandidate?.text, !shown.isEmpty else { return }
+        if let typed, !typed.isEmpty, shown.hasPrefix(typed) { return }
+        debounceTask?.cancel()
+        generationTask?.cancel()
+        clearCompletion()
+    }
+
     /// Tab: insert the next word of the suggestion and keep the *rest* of the same completion in place
     /// so the user can keep pressing Tab to accept subsequent words. We do **not** regenerate: the
     /// anchor stays put, the insertion-induced snapshot re-derives the shrinking remainder, and

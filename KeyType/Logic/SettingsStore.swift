@@ -32,9 +32,9 @@ enum CompletionLength: String, CaseIterable, Identifiable {
     /// Base `maxCompletionTokens` for a request (token-healing may widen this at runtime).
     var maxCompletionTokens: Int {
         switch self {
-        case .short: return 2
-        case .medium: return 4
-        case .long: return 8
+        case .short: return 4
+        case .medium: return 8
+        case .long: return 16
         }
     }
 

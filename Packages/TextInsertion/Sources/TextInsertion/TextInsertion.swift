@@ -103,7 +103,11 @@ public final class CGEventKeystrokeSynthesizer: KeystrokeSynthesizing {
     private static let keyV: CGKeyCode = 9
     private static let keyDelete: CGKeyCode = 51
 
-    public init() {}
+    public init() {
+        // Tag every event posted from this source so KeyType's own key taps can tell our synthesized
+        // paste/typing keystrokes apart from the user's keys and ignore them. See ADR-039.
+        source?.userData = SynthesizedEventMarker.userData
+    }
 
     public func paste() { sendShortcut(Self.keyV, flags: .maskCommand) }
 
