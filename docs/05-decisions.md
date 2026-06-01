@@ -82,6 +82,7 @@ row here.**
 | 056 | Mid-word quality: accurate OCR, dead-end + charset guards | generation |
 | 057 | Mid-line FIM quality: truncate-at-overlap, suffix rerank, windowing | generation |
 | 059 | Trie self-check tolerates duplicate-byte tokens (Gemma) | token-profiles |
+| 063 | Preserve visible completions for macOS screen capture shortcuts | keyboard/ui |
 
 ---
 
@@ -2494,3 +2495,24 @@ text. Both are now closed:
   again whenever the string signal is weak. Tests quantify both paths: the original branch-promotion
   fixture avoids 5/6 recomputes versus 1/6 with top-only reuse, and the rollback fixture recovers 5/5
   deleted-typo anchors versus 0/5 after the old flushed-cache behavior.
+
+## ADR-063 — Preserve visible completions for macOS screen capture shortcuts
+
+- Date: 2026-06-02
+- Status: accepted
+- Context: ADR-037 correctly clears visible completions from the global key tap as soon as a
+  non-accept keydown might mutate the text field or move the caret. macOS screen capture shortcuts
+  (`Shift-Command-3/4/5`, plus the Control clipboard variants) are different: they are observation
+  commands, not edits. Treating them as divergent `.nonText` keydowns hid the very overlay users need
+  to capture in screenshot bug reports and recording demos.
+- Decision: classify the macOS screen capture shortcuts as reserved system shortcuts in
+  `AutocompleteCore`, before user-configurable acceptance matching. The acceptance tap passes them
+  through untouched and asks the completion controller to preserve the current overlay. While that
+  screen-capture hold is active, Tab acceptance is disabled until a later non-Screenshot focused-field
+  snapshot revalidates the text/caret context. The WeChat fallback key tap uses the same shared
+  classifier so it does not clear its fallback buffer on screenshot shortcuts.
+- Consequences: screen captures can include the visible ghost text without KeyType consuming the
+  shortcut or hiding the overlay. Ordinary Command shortcuts still clear eagerly, because they can
+  mutate text, selection, caret, or document state. The Screenshot toolbar can temporarily take focus
+  without making a stale completion acceptable; the normal AX pipeline resumes once the original field
+  is seen again. Tests cover the reserved key-code/modifier contract and the acceptance-side wrapper.

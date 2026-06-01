@@ -342,6 +342,11 @@ public final class AccessibilityContextTracker: NSObject {
         guard event.getIntegerValueField(.eventSourceUserData) != SynthesizedEventMarker.userData else {
             return
         }
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let flags = event.flags
+        guard !Self.isScreenCaptureShortcut(keyCode: keyCode, flags: flags) else {
+            return
+        }
         guard frontmostAppTarget().bundleIdentifier == WeChatFallbackTextContext.bundleIdentifier else {
             fallbackBuffer.reset()
             return
@@ -351,14 +356,13 @@ public final class AccessibilityContextTracker: NSObject {
             return
         }
 
-        let flags = event.flags
         if flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate) {
             fallbackBuffer.reset()
             refreshSoon()
             return
         }
 
-        switch event.getIntegerValueField(.keyboardEventKeycode) {
+        switch keyCode {
         case 36, 53, 76, 123, 124, 125, 126:
             fallbackBuffer.reset()
             refreshSoon()
@@ -414,6 +418,16 @@ public final class AccessibilityContextTracker: NSObject {
         )
         guard length > 0 else { return nil }
         return String(utf16CodeUnits: chars, count: length)
+    }
+
+    private static func isScreenCaptureShortcut(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        ReservedSystemShortcut.isScreenCapture(
+            keyCode: keyCode,
+            shift: flags.contains(.maskShift),
+            control: flags.contains(.maskControl),
+            option: flags.contains(.maskAlternate),
+            command: flags.contains(.maskCommand)
+        )
     }
 
     // MARK: - Helpers

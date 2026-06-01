@@ -48,6 +48,21 @@ struct OnboardingAndKeybindTests {
         #expect(shortcut.displayString == "\u{21E7}\u{2318}A")
     }
 
+    @Test func screenshotShortcutsAreReservedBeforeAcceptanceBindings() {
+        #expect(CompletionAcceptanceController.isScreenCaptureShortcut(
+            keyCode: 21,
+            flags: [.maskShift, .maskCommand]
+        ))
+        #expect(CompletionAcceptanceController.isScreenCaptureShortcut(
+            keyCode: 23,
+            flags: [.maskShift, .maskControl, .maskCommand]
+        ))
+        #expect(!CompletionAcceptanceController.isScreenCaptureShortcut(
+            keyCode: 21,
+            flags: [.maskShift, .maskAlternate, .maskCommand]
+        ))
+    }
+
     // MARK: - Wizard step model
 
     @Test func introAndOutroStepsHaveNoProgressIndex() {

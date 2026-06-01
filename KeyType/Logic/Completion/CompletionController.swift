@@ -105,6 +105,14 @@ final class CompletionController {
     /// completion. Cleared once the suggestion is exhausted, the user diverges, or the overlay is torn
     /// down — at which point normal per-keystroke generation resumes.
     private var holdAnchor = false
+    /// Set after a macOS screenshot/screen-recording shortcut. While active, the already-visible
+    /// overlay is preserved through transient capture focus changes, but acceptance is disabled until
+    /// a real non-Screenshot focused-field snapshot revalidates the text/caret context.
+    private var screenCaptureHold: ScreenCaptureHold?
+
+    private struct ScreenCaptureHold {
+        var originalBundleIdentifier: String?
+    }
 
     var completionsEnabled = true {
         didSet {
@@ -116,6 +124,9 @@ final class CompletionController {
     nonisolated static let moderateDebounceNanoseconds: UInt64 = 50_000_000
     nonisolated static let conservativeDebounceNanoseconds: UInt64 = 90_000_000
     private static let sideContextFreezeInterval: TimeInterval = 2.0
+    private static let screenCaptureBundleIdentifiers: Set<String> = [
+        "com.apple.screenshot.launcher"
+    ]
 
     private struct FrozenPromptSideContext {
         var fieldKey: String
@@ -261,7 +272,12 @@ final class CompletionController {
     private func handle(_ snapshot: FocusedFieldSnapshot?) {
         // Conditions under which there can be no suggestion: tear everything down and reset.
         guard completionsEnabled, loadState == .ready, let engine else { reset(); return }
-        guard let snapshot else { reset(); return }
+        guard let snapshot else {
+            if preserveScreenCaptureHoldForMissingSnapshot() { return }
+            reset()
+            return
+        }
+        if preserveScreenCaptureHold(for: snapshot.context) { return }
         guard let caretRect = snapshot.caretRect, !caretRect.isEmpty else {
             if preserveHeldCompletion(for: snapshot.context) { return }
             reset(keepingReuseHistory: true)
@@ -288,7 +304,7 @@ final class CompletionController {
         // Skip identical re-emits — keep whatever is on screen, no flicker. The one exception is a
         // moved caret with unchanged text (e.g. the user scrolled the field): re-pin the visible
         // suggestion to the new caret rather than leaving it stranded at the old screen position.
-        let key = context.beforeCursor + "\u{1}" + context.afterCursor + "\u{1}" + context.target.bundleIdentifier
+        let key = Self.contextKey(for: context)
         if key == lastContextKey {
             if visibleCandidate != nil, Self.caretMoved(from: lastCaretRect, to: caretRect) {
                 lastCaretRect = caretRect
@@ -710,6 +726,7 @@ final class CompletionController {
         anchorText = nil
         anchorContext = nil
         holdAnchor = false
+        screenCaptureHold = nil
     }
 
     /// Hide any ghost text and forget the last context, so the next snapshot is treated as new.
@@ -724,6 +741,45 @@ final class CompletionController {
             reuseHistory.removeAll()
         }
         clearCompletion()
+    }
+
+    private func preserveScreenCaptureHold(for context: TextFieldContext) -> Bool {
+        guard screenCaptureHold != nil else { return false }
+        guard visibleCandidate != nil else {
+            screenCaptureHold = nil
+            return false
+        }
+        if Self.isScreenCaptureBundleIdentifier(context.target.bundleIdentifier) {
+            return true
+        }
+        // Any non-Screenshot text-field snapshot revalidates (or invalidates) the original context.
+        // Let the normal pipeline handle it, with acceptance enabled again after this point.
+        screenCaptureHold = nil
+        return false
+    }
+
+    private func preserveScreenCaptureHoldForMissingSnapshot() -> Bool {
+        guard let hold = screenCaptureHold else { return false }
+        guard visibleCandidate != nil else {
+            screenCaptureHold = nil
+            return false
+        }
+        let frontmostBundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if let frontmostBundleIdentifier,
+           Self.isScreenCaptureBundleIdentifier(frontmostBundleIdentifier)
+            || frontmostBundleIdentifier == hold.originalBundleIdentifier {
+            return true
+        }
+        screenCaptureHold = nil
+        return false
+    }
+
+    private static func isScreenCaptureBundleIdentifier(_ bundleIdentifier: String) -> Bool {
+        screenCaptureBundleIdentifiers.contains(bundleIdentifier)
+    }
+
+    private static func contextKey(for context: TextFieldContext) -> String {
+        context.beforeCursor + "\u{1}" + context.afterCursor + "\u{1}" + context.target.bundleIdentifier
     }
 
     /// Whether the completion should render as a capsule below the caret rather than inline ghost
@@ -751,8 +807,23 @@ final class CompletionController {
 
     /// True when there is a visible completion the user is allowed to accept with Tab.
     var canAcceptCompletion: Bool {
+        guard screenCaptureHold == nil else { return false }
         guard visibleCandidate != nil, let context = latestContext ?? anchorContext else { return false }
         return compatibilityStore.policy(for: context).allowsTabAcceptance
+    }
+
+    /// Called by the global key tap before passing macOS screenshot / screen-recording shortcuts
+    /// through. The shortcut itself does not mutate the text field, so keep the current overlay in
+    /// place for the capture. Acceptance stays disabled until a later focused-field snapshot proves
+    /// the original context is active again.
+    func prepareForScreenCaptureShortcut() {
+        guard visibleCandidate != nil else { return }
+        screenCaptureHold = ScreenCaptureHold(
+            originalBundleIdentifier: (latestContext ?? anchorContext)?.target.bundleIdentifier
+        )
+        debounceTask?.cancel()
+        generationTask?.cancel()
+        warmupTask?.cancel()
     }
 
     /// Synchronously dismiss the on-screen suggestion when a just-pressed key makes it stale, *before*

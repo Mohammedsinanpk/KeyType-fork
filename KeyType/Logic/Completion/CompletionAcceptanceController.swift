@@ -95,6 +95,15 @@ final class CompletionAcceptanceController {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
 
+        // Screen capture is observation, not editing. Let macOS handle the reserved shortcuts and
+        // preserve the visible suggestion for the capture instead of treating the command as a
+        // divergent non-text key. This check intentionally runs before user-configurable accept
+        // shortcuts so KeyType can never steal Shift-Command-3/4/5 from the system.
+        if Self.isScreenCaptureShortcut(keyCode: keyCode, flags: flags) {
+            completionController?.prepareForScreenCaptureShortcut()
+            return Unmanaged.passUnretained(event)
+        }
+
         let acceptWord = settings?.acceptWordShortcut ?? .defaultAcceptWord
         let acceptFull = settings?.acceptFullShortcut ?? .defaultAcceptFull
 
@@ -165,5 +174,15 @@ final class CompletionAcceptanceController {
             return nil
         }
         return text
+    }
+
+    nonisolated static func isScreenCaptureShortcut(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        ReservedSystemShortcut.isScreenCapture(
+            keyCode: keyCode,
+            shift: flags.contains(.maskShift),
+            control: flags.contains(.maskControl),
+            option: flags.contains(.maskAlternate),
+            command: flags.contains(.maskCommand)
+        )
     }
 }
