@@ -16,7 +16,7 @@ An open-source, on-device, system-wide tab-autocomplete utility for macOS.
 
 <p align="center">
   <a href="https://youtu.be/1huNPFQHqi8">
-    <img src="https://img.youtube.com/vi/1huNPFQHqi8/maxresdefault.jpg" alt="Watch the KeyType demo video" width="720">
+    <img src=".github/images/demo.gif" alt="KeyType demo video" width="720">
   </a>
 </p>
 
