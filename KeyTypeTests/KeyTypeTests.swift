@@ -188,6 +188,18 @@ struct KeyTypeTests {
         }
     }
 
+    @Test func promotionCacheRecomputesWhenLiveCaretSwitchesFromCJKToLatinComposition() {
+        let cache = Self.promotionCache(candidates: ["z z z continuation"], beforeCursor: "我")
+        let live = TextFieldContext(beforeCursor: "我z", target: Self.target)
+
+        let decision = cache.decision(for: live)
+
+        guard case .recompute(.contextChanged) = decision else {
+            Issue.record("Expected script-change recompute, got \(decision)")
+            return
+        }
+    }
+
     @Test func heldAnchorCanKeepShortRemainderThatPromotionCacheWouldReject() {
         let anchor = TextFieldContext(beforeCursor: "I will ", target: Self.target)
         let liveAfterFirstAcceptedWord = TextFieldContext(beforeCursor: "I will say ", target: Self.target)

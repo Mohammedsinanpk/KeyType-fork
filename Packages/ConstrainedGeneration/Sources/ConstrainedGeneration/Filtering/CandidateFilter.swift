@@ -90,7 +90,14 @@ public final class DefaultCandidateFilter: CandidateFiltering {
         //    insertable as an inline completion.
         if !Self.isInsertionSafe(candidate.text) { return .insertionUnsafe }
 
-        // 6a. Mid-word charset net (the in-beam `MidWordCharsetGuard` is the primary defence): a
+        // 6a. CJK script net: once the live caret is inside CJK text, a Latin-leading continuation
+        //     is almost always pinyin/romanization leakage from the base model or IME composition.
+        //     Suppress it rather than showing visibly wrong ghost text.
+        if Self.hasCJKScriptMismatch(candidate.text, request: request) {
+            return .scriptMismatch
+        }
+
+        // 6b. Mid-word charset net (the in-beam `MidWordCharsetGuard` is the primary defence): a
         //     prose completion that closes the typed word with a garbage symbol ("gre"→"at$") or
         //     piles up punctuation ("....") is corruption, not insertable text. See ADR-052.
         if MidWordCharsetGuard.violates(completion: candidate.text, request: request) {
@@ -146,6 +153,15 @@ public final class DefaultCandidateFilter: CandidateFiltering {
         }
         if text.rangeOfCharacter(from: .alphanumerics) == nil { return false }
         return true
+    }
+
+    static func hasCJKScriptMismatch(_ text: String, request: CompletionRequest) -> Bool {
+        guard request.mode == .prose || request.mode == .correction else { return false }
+        guard let last = request.context.beforeCursor.last, !last.isWhitespace else { return false }
+        guard TextScriptProfile.lastSubstantiveScript(in: request.context.beforeCursor) == .cjk else {
+            return false
+        }
+        return TextScriptProfile.firstSubstantiveScript(in: text) == .latin
     }
 
     // MARK: - Current-word typo net

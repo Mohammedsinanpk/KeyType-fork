@@ -219,6 +219,40 @@ final class CompletionUITests: XCTestCase {
         XCTAssertLessThan(layout.frame.height, 40)
     }
 
+    @MainActor
+    func testDisplayPlacementUsesCapsuleWhenInlineWouldStartWithBlankWrappedLine() {
+        let font = NSFont.systemFont(ofSize: 24)
+        let placement = OverlayPlacement(
+            cursorRect: CGRect(x: 1221, y: 512, width: 2, height: 37),
+            fieldRect: CGRect(x: 524, y: 506, width: 704, height: 45)
+        )
+
+        let display = GhostTextOverlayWindow.displayPlacement(
+            for: "Chinese.",
+            font: font,
+            placement: placement
+        )
+
+        XCTAssertEqual(display.presentation, .capsule)
+    }
+
+    @MainActor
+    func testDisplayPlacementKeepsInlineWhenFirstVisibleTokenFits() {
+        let font = NSFont.systemFont(ofSize: 14)
+        let placement = OverlayPlacement(
+            cursorRect: CGRect(x: 200, y: 100, width: 2, height: 18),
+            fieldRect: CGRect(x: 20, y: 80, width: 500, height: 44)
+        )
+
+        let display = GhostTextOverlayWindow.displayPlacement(
+            for: " continuation",
+            font: font,
+            placement: placement
+        )
+
+        XCTAssertEqual(display.presentation, .inlineGhost)
+    }
+
     // MARK: - Advance past an accepted word
 
     @MainActor

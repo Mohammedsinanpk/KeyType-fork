@@ -83,6 +83,9 @@ row here.**
 | 057 | Mid-line FIM quality: truncate-at-overlap, suffix rerank, windowing | generation |
 | 059 | Trie self-check tolerates duplicate-byte tokens (Gemma) | token-profiles |
 | 063 | Preserve visible completions for macOS screen capture shortcuts | keyboard/ui |
+| 064 | Cache Electron bundle detection outside the AX hot path | performance |
+| 065 | Suppress Latin-leading CJK completions and script-changing reuse | generation/ui |
+| 066 | Promote no-room trailing inline ghost text to a capsule | ui |
 
 ---
 
@@ -2538,3 +2541,45 @@ text. Both are now closed:
   conservative and local to the launch session; if an app updates while KeyType is running, the new
   bundle contents are picked up after the next KeyType launch. Tests cover Electron framework markers,
   `.asar` resource markers, and native bundles without markers.
+
+## ADR-065 — Suppress Latin-leading CJK completions and script-changing reuse
+
+- Date: 2026-06-02
+- Status: accepted
+- Context: CJK typing exposed two related quality failures in `predictions.log`: after Chinese text,
+  the model often ranked Latin/romanized candidates such as `", weishenme2, we"` or `" app。"` highly;
+  during IME composition, cached branches could also remain usable across a major script transition
+  such as committed Chinese text followed by transient Latin pinyin. Both are visibly wrong ghost text,
+  and product policy says suppression is preferable.
+- Decision: add a small script classifier in `AutocompleteCore` that recognizes Latin vs CJK
+  substantive characters. The output filter now suppresses prose/correction candidates whose first
+  substantive character is Latin when the live caret is immediately after CJK text. The promotion cache
+  and reuse history also reject reuse when the active script at the caret changes between anchor and
+  live context.
+- Consequences: KeyType no longer shows romanized Latin continuations directly after CJK text, and
+  cached suggestions are less likely to survive IME composition transitions. Explicit Latin after a
+  user-typed whitespace boundary is still allowed, so mixed-language writing can start a fresh Latin
+  word intentionally. This does not solve model quality for genuine CJK continuations; it adds a
+  conservative last-line filter and stale-reuse guard. Tests cover script classification, candidate
+  suppression, and cache invalidation across CJK-to-Latin composition.
+
+## ADR-066 — Promote no-room trailing inline ghost text to a capsule
+
+- Date: 2026-06-02
+- Status: accepted
+- Context: In the Codex app (`com.openai.codex`), Chromium accessibility sometimes reports the
+  focused composer caret at the text field's trailing edge even when the visible editor still has
+  usable horizontal space. The inline ghost renderer treats a near-zero remaining width as a soft-wrap
+  opportunity, so a short completion such as `Chinese.` can render as an empty first ghost line plus
+  the word at the field's leading edge on the next visual line. That is a visually-wrong suggestion
+  even when the model candidate is correct.
+- Decision: keep the existing wrapped inline layout primitive, but have the presenter choose an
+  effective capsule presentation when the first visible completion token cannot fit in the remaining
+  inline width. This is geometry-driven rather than Codex-specific: ordinary inline completions still
+  render as ghost text, mid-line suffix completions still use the existing capsule rule, and text
+  mirror targets remain unchanged.
+- Consequences: Chromium composers with unreliable trailing-edge geometry show the suggestion as a
+  distinct, clamped capsule instead of a misleading wrapped ghost line. The trade-off is that a true
+  end-of-line wrap may use a capsule rather than mimicking the field's next-line text layout, which is
+  preferable to drawing a continuation at an apparently unrelated leading-edge position. Tests cover
+  the Codex geometry from `predictions.log` and a normal inline case with enough remaining width.

@@ -258,6 +258,7 @@ struct CompletionReuseHistory: Equatable {
         return anchor.target == live.target
             && anchor.afterCursor == live.afterCursor
             && anchor.traits == live.traits
+            && !TextScriptProfile.hasMajorScriptChange(anchor: anchor, live: live)
             && !anchorHasSelection
             && !liveHasSelection
     }

@@ -54,6 +54,7 @@ reads `SUPPRESS(x)`, find `x` here and check whether the gate is firing correctl
 | `displayWidthExceeded` | Wider than `maxDisplayWidth`. |
 | `maxCompletionLengthExceeded` | Longer than `maxCompletionTokens` allows. |
 | `insertionUnsafe` | Insertion strategy can't safely apply here, or a junk char/punctuation-run corrupts the mid-word completion (`MidWordCharsetGuard`, ADR-056). |
+| `scriptMismatch` | The caret is in CJK text but the candidate starts in a different major script, usually pinyin/romanized leakage from IME composition (ADR-065). |
 | `currentWordLooksLikeTypo` | In-beam typo guard closed the word into a misspelling (ADR-015/026). |
 | `currentWordHasNoValidCompletion` | The word is left *open* on a stem that can't begin any dictionary word (ADR-056). |
 | `duplicatesAfterCursor` | Reproduces text already after the caret — `SuffixOverlapGuard`. The engine first tries to *truncate* a mid-line branch at the overlap and keep the real middle; this fires only when nothing safe remains (ADR-049/057). |

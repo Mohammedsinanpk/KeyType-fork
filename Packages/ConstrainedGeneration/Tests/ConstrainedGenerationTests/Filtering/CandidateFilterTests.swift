@@ -180,6 +180,44 @@ final class CandidateFilterTests: XCTestCase {
         XCTAssertNil(filter.suppressionReason(for: candidate(" cell."), request: request()))
     }
 
+    func testSuppressesLatinLeadingCompletionAfterCJKText() {
+        let filter = DefaultCandidateFilter()
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate(", weishenme2, we"),
+                request: request(beforeCursor: "为什么")
+            ),
+            .scriptMismatch
+        )
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate(" app。"),
+                request: request(beforeCursor: "我现在在测试这个")
+            ),
+            .scriptMismatch
+        )
+    }
+
+    func testKeepsCJKCompletionAfterCJKText() {
+        let filter = DefaultCandidateFilter()
+        XCTAssertNil(
+            filter.suppressionReason(
+                for: candidate("不敢相信"),
+                request: request(beforeCursor: "我真")
+            )
+        )
+    }
+
+    func testScriptMismatchSkippedAfterExplicitWordBoundary() {
+        let filter = DefaultCandidateFilter()
+        XCTAssertNil(
+            filter.suppressionReason(
+                for: candidate("app"),
+                request: request(beforeCursor: "我想打开 ")
+            )
+        )
+    }
+
     // MARK: - Suffix-duplication net
 
     func testSuppressesCompletionDuplicatingAfterCursor() {

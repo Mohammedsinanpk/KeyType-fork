@@ -188,6 +188,9 @@ public enum SuppressionReason: Equatable {
     case displayWidthExceeded
     case maxCompletionLengthExceeded
     case insertionUnsafe
+    /// The user is actively typing in a CJK script, but the candidate starts in a different major
+    /// script (typically pinyin/romanized Latin output after Chinese/Japanese/Korean context).
+    case scriptMismatch
     case currentWordLooksLikeTypo
     /// The completion leaves the word the user is typing *open* on a stem that cannot begin any word
     /// in the dictionary (e.g. a lone `"x"` after `"th"`) — so it could never resolve to a real word.

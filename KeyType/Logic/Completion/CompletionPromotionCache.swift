@@ -101,6 +101,7 @@ struct CompletionPromotionCache: Equatable {
             && liveContext.afterCursor == anchorContext.afterCursor
             && liveContext.traits == anchorContext.traits
             && liveContext.beforeCursor.hasPrefix(anchorContext.beforeCursor)
+            && !TextScriptProfile.hasMajorScriptChange(anchor: anchorContext, live: liveContext)
             && !anchorHasSelection
             && !liveHasSelection
     }
