@@ -15,6 +15,7 @@ struct KeyRecorderView: View {
     let subtitle: String?
     let shortcut: AcceptanceShortcut
     let onChange: (AcceptanceShortcut) -> Void
+    var onClear: (() -> Void)?
     var onReset: (() -> Void)?
 
     @State private var isRecording = false
@@ -25,12 +26,14 @@ struct KeyRecorderView: View {
         subtitle: String? = nil,
         shortcut: AcceptanceShortcut,
         onChange: @escaping (AcceptanceShortcut) -> Void,
+        onClear: (() -> Void)? = nil,
         onReset: (() -> Void)? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
         self.shortcut = shortcut
         self.onChange = onChange
+        self.onClear = onClear
         self.onReset = onReset
     }
 
@@ -60,6 +63,12 @@ struct KeyRecorderView: View {
 
             Button(isRecording ? "Cancel" : "Change") {
                 isRecording ? removeMonitor() : startRecording()
+            }
+            if let onClear, !isRecording, shortcut.isAssigned {
+                Button("Clear") {
+                    removeMonitor()
+                    onClear()
+                }
             }
             if let onReset, !isRecording {
                 Button("Reset") {

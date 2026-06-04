@@ -53,7 +53,8 @@ struct KeyTypeApp: App {
                     appDelegate.requestOpenOnboarding()
                 },
                 reloadModel: { appDelegate.completion.reloadModel() },
-                importModel: { appDelegate.presentModelImportPanel() }
+                importModel: { appDelegate.presentModelImportPanel() },
+                addApp: { appDelegate.presentAppAddPanel() }
             )
             // Promote KeyType to a dock-visible app while Settings is open so it's easy to switch
             // back to, then drop back to the menu-bar-only agent policy on close. See ADR-058.

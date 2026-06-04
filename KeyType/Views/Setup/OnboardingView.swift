@@ -192,7 +192,7 @@ struct OnboardingView: View {
             PermissionCard(
                 kind: .inputMonitoring,
                 requirement: .required,
-                explanation: "Detects the global accept key (Tab) so KeyType can insert a completion.",
+                explanation: "Detects configured global accept keys so KeyType can insert a completion.",
                 isGranted: permissions.inputMonitoring.isGranted,
                 guidance: permissionGuidance
             )
@@ -256,7 +256,7 @@ struct OnboardingView: View {
         @Bindable var settings = settings
         StepHeader(
             title: "Acceptance keys",
-            subtitle: "Press Change and then the keys you want. You can adjust these later in Settings."
+            subtitle: "Press Change and then the keys you want. Use Clear to leave an action unassigned."
         )
         VStack(spacing: 10) {
             CardContainer {
@@ -265,6 +265,7 @@ struct OnboardingView: View {
                     subtitle: "Inserts the next word of the suggestion.",
                     shortcut: settings.acceptWordShortcut,
                     onChange: { settings.acceptWordShortcut = $0 },
+                    onClear: { settings.acceptWordShortcut = .unassigned },
                     onReset: settings.acceptWordShortcut != .defaultAcceptWord
                         ? { settings.acceptWordShortcut = .defaultAcceptWord } : nil
                 )
@@ -275,6 +276,7 @@ struct OnboardingView: View {
                     subtitle: "Inserts the whole suggestion at once.",
                     shortcut: settings.acceptFullShortcut,
                     onChange: { settings.acceptFullShortcut = $0 },
+                    onClear: { settings.acceptFullShortcut = .unassigned },
                     onReset: settings.acceptFullShortcut != .defaultAcceptFull
                         ? { settings.acceptFullShortcut = .defaultAcceptFull } : nil
                 )
@@ -346,7 +348,7 @@ struct OnboardingView: View {
 
             Text("You're all set")
                 .font(.title.weight(.semibold))
-            Text("Start typing anywhere. Press \(settings.acceptWordShortcut.displayString) to accept a word, \(settings.acceptFullShortcut.displayString) for the whole suggestion.")
+            Text("Start typing anywhere. \(acceptanceShortcutSummary)")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -359,6 +361,22 @@ struct OnboardingView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 16)
+    }
+
+    private var acceptanceShortcutSummary: String {
+        let word = settings.acceptWordShortcut
+        let full = settings.acceptFullShortcut
+
+        switch (word.isAssigned, full.isAssigned) {
+        case (true, true):
+            return "Press \(word.displayString) to accept a word, \(full.displayString) for the whole suggestion."
+        case (true, false):
+            return "Press \(word.displayString) to accept a word. Accept entire suggestion is unassigned."
+        case (false, true):
+            return "Press \(full.displayString) to accept the whole suggestion. Accept word is unassigned."
+        case (false, false):
+            return "Acceptance shortcuts are unassigned. Set them in Settings when needed."
+        }
     }
 
     // MARK: - Step model

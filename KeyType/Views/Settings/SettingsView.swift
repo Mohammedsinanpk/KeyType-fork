@@ -25,6 +25,8 @@ struct SettingsView: View {
     /// Present the GGUF import open panel. Owned by `AppDelegate` because it must quiesce the AX
     /// pipeline around the panel to avoid a main-thread deadlock (see `presentModelImportPanel`).
     let importModel: () -> Void
+    /// Present the app-bundle picker with the same AX-pipeline quiescing used by model import.
+    let addApp: () -> Void
 
     @State private var selection: SettingsCategory = .general
 
@@ -62,7 +64,7 @@ struct SettingsView: View {
         case .privacy:
             PrivacySettingsView(settings: settings, permissions: permissions, clearPersonalData: clearPersonalData)
         case .apps:
-            AppsSettingsView(settings: settings)
+            AppsSettingsView(settings: settings, addApp: addApp)
         case .statistics:
             StatisticsSettingsView(
                 telemetry: telemetry,

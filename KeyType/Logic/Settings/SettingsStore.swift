@@ -59,6 +59,7 @@ final class SettingsStore {
         static let completionLength = "KeyType.settings.completionLength"
         static let selectedModelFilename = "KeyType.settings.selectedModelFilename"
         static let perAppDisabled = "KeyType.settings.perAppDisabledBundleIDs"
+        static let manualPerAppDisplayNames = "KeyType.settings.manualPerAppDisplayNames"
         static let acceptWordKeyCode = "KeyType.settings.acceptWordKeyCode"
         static let acceptWordModifiers = "KeyType.settings.acceptWordModifiers"
         static let acceptWordLabel = "KeyType.settings.acceptWordLabel"
@@ -103,6 +104,11 @@ final class SettingsStore {
         didSet { defaults.set(Array(perAppDisabled).sorted(), forKey: Key.perAppDisabled) }
     }
 
+    /// Apps the user explicitly added to the per-app Settings list, keyed by bundle identifier.
+    var manualPerAppDisplayNames: [String: String] {
+        didSet { defaults.set(manualPerAppDisplayNames, forKey: Key.manualPerAppDisplayNames) }
+    }
+
     /// Hotkey that accepts the next word of the visible suggestion. Defaults to Tab.
     var acceptWordShortcut: AcceptanceShortcut {
         didSet { persist(acceptWordShortcut, keyCode: Key.acceptWordKeyCode, modifiers: Key.acceptWordModifiers, label: Key.acceptWordLabel) }
@@ -123,6 +129,8 @@ final class SettingsStore {
             .flatMap(CompletionLength.init(rawValue:)) ?? .medium
         self.selectedModelFilename = defaults.string(forKey: Key.selectedModelFilename)
         self.perAppDisabled = Set(defaults.stringArray(forKey: Key.perAppDisabled) ?? [])
+        self.manualPerAppDisplayNames =
+            defaults.dictionary(forKey: Key.manualPerAppDisplayNames) as? [String: String] ?? [:]
         self.acceptWordShortcut = Self.loadShortcut(
             defaults: defaults,
             keyCodeKey: Key.acceptWordKeyCode,
@@ -137,6 +145,16 @@ final class SettingsStore {
             labelKey: Key.acceptFullLabel,
             fallback: .defaultAcceptFull
         )
+    }
+
+    func addManualApp(bundleIdentifier: String, name: String) {
+        let trimmedBundleIdentifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBundleIdentifier.isEmpty else { return }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var updatedApps = manualPerAppDisplayNames
+        updatedApps[trimmedBundleIdentifier] = trimmedName.isEmpty ? trimmedBundleIdentifier : trimmedName
+        manualPerAppDisplayNames = updatedApps
     }
 
     private func persist(_ shortcut: AcceptanceShortcut, keyCode: String, modifiers: String, label: String) {
@@ -156,6 +174,7 @@ final class SettingsStore {
         // the factory default rather than binding acceptance to key code 0.
         guard defaults.object(forKey: keyCodeKey) != nil else { return fallback }
         let keyCode = Int64(defaults.integer(forKey: keyCodeKey))
+        guard keyCode >= 0 else { return .unassigned }
         let modifiers = AcceptanceModifierMask(rawValue: UInt8(truncatingIfNeeded: defaults.integer(forKey: modifiersKey)))
         let label = defaults.string(forKey: labelKey) ?? fallback.label
         return AcceptanceShortcut(keyCode: keyCode, modifiers: modifiers, label: label)

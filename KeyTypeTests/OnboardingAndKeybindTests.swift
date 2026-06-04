@@ -34,6 +34,14 @@ struct OnboardingAndKeybindTests {
         #expect(!AcceptanceShortcut.defaultAcceptWord.matches(keyCode: 49, flags: CGEventFlags()))
     }
 
+    @Test func unassignedShortcutDisplaysAndNeverMatches() {
+        let shortcut = AcceptanceShortcut.unassigned
+        #expect(!shortcut.isAssigned)
+        #expect(shortcut.displayString == "Unassigned")
+        #expect(!shortcut.matches(keyCode: 48, flags: CGEventFlags()))
+        #expect(!shortcut.matches(keyCode: 0, flags: .maskCommand))
+    }
+
     @Test func modifierMaskFromCGFlagsRoundTrips() {
         let mask = AcceptanceModifierMask(cgFlags: [.maskShift, .maskCommand])
         #expect(mask.contains(.shift))

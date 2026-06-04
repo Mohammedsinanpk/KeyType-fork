@@ -52,21 +52,27 @@ struct AcceptanceModifierMask: OptionSet, Sendable, Equatable {
     }
 }
 
-/// A complete acceptance hotkey: a key code, its modifiers, and a cached display label captured at
-/// record time (so we can show e.g. "A" or "⇥" without re-deriving it from the keyboard layout).
+/// An acceptance shortcut: either unassigned, or a key code, its modifiers, and a cached display
+/// label captured at record time (so we can show e.g. "A" or "⇥" without re-deriving it from the
+/// keyboard layout).
 struct AcceptanceShortcut: Sendable, Equatable {
     var keyCode: Int64
     var modifiers: AcceptanceModifierMask
     var label: String
 
-    var displayString: String { modifiers.displayString + label }
+    var isAssigned: Bool { keyCode >= 0 }
+
+    var displayString: String {
+        isAssigned ? modifiers.displayString + label : "Unassigned"
+    }
 
     /// Whether `event` (a `CGEvent` key-down) matches this shortcut exactly, comparing the relevant
     /// modifier subset so e.g. a bare Tab does not also fire a Shift+Tab binding.
     func matches(keyCode eventKeyCode: Int64, flags: CGEventFlags) -> Bool {
-        eventKeyCode == keyCode && AcceptanceModifierMask(cgFlags: flags) == modifiers
+        isAssigned && eventKeyCode == keyCode && AcceptanceModifierMask(cgFlags: flags) == modifiers
     }
 
+    static let unassigned = AcceptanceShortcut(keyCode: -1, modifiers: [], label: "")
     static let defaultAcceptWord = AcceptanceShortcut(keyCode: 48, modifiers: [], label: "\u{21E5}")
     static let defaultAcceptFull = AcceptanceShortcut(keyCode: 48, modifiers: .shift, label: "\u{21E5}")
 }

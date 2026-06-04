@@ -13,6 +13,15 @@ import Testing
 struct KeyTypeTests {
     private static let target = AppTarget(bundleIdentifier: "com.test.app", appName: "Test")
 
+    private static func temporaryDefaults() -> (UserDefaults, String) {
+        let suiteName = "KeyTypeTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            fatalError("Unable to create temporary defaults suite")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        return (defaults, suiteName)
+    }
+
     private static func promotionCache(
         candidates: [String],
         beforeCursor: String = "I will ",
@@ -48,6 +57,35 @@ struct KeyTypeTests {
 
     @Test func adaptiveDebounceStartsAtModerateDelayBeforeTelemetry() {
         #expect(CompletionController.adaptiveDebounceNanoseconds(lastGenerationLatencyMs: nil) == 25_000_000)
+    }
+
+    @Test @MainActor func manualAppEntriesPersistWithPerAppDisable() {
+        let (defaults, suiteName) = Self.temporaryDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = SettingsStore(defaults: defaults)
+        store.addManualApp(bundleIdentifier: " com.example.MenuBar ", name: " MenuBar ")
+        store.setApp("com.example.MenuBar", enabled: false)
+
+        let reloaded = SettingsStore(defaults: defaults)
+
+        #expect(reloaded.manualPerAppDisplayNames["com.example.MenuBar"] == "MenuBar")
+        #expect(!reloaded.isAppEnabled("com.example.MenuBar"))
+    }
+
+    @Test @MainActor func unassignedAcceptanceShortcutsPersist() {
+        let (defaults, suiteName) = Self.temporaryDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = SettingsStore(defaults: defaults)
+        store.acceptWordShortcut = .unassigned
+        store.acceptFullShortcut = AcceptanceShortcut(keyCode: 48, modifiers: [], label: "\u{21E5}")
+
+        let reloaded = SettingsStore(defaults: defaults)
+
+        #expect(reloaded.acceptWordShortcut == .unassigned)
+        #expect(!reloaded.acceptWordShortcut.matches(keyCode: 48, flags: CGEventFlags()))
+        #expect(reloaded.acceptFullShortcut.matches(keyCode: 48, flags: CGEventFlags()))
     }
 
     @Test func capsulePresentationIsUsedForVisibleCurrentLineSuffix() {

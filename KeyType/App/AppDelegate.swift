@@ -44,11 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set once the user has confirmed quitting and the async model teardown is under way, so the
     /// confirmation alert isn't shown twice and `applicationShouldTerminate` doesn't re-prompt.
     private var isTerminating = false
-    /// True while the GGUF import open panel is on screen. The AX/keyboard pipeline must stay fully
-    /// stopped for the panel's lifetime (its synchronous AX reads deadlock against the panel), so
+    /// True while an open panel is on screen. The AX/keyboard pipeline must stay fully stopped for
+    /// the panel's lifetime (its synchronous AX reads deadlock against the panel), so
     /// `syncContextCaptureWithPermission()` is suppressed — otherwise the 1 Hz permission timer would
     /// restart the tracker mid-panel and re-trigger the hang.
-    private var isPresentingImportPanel = false
+    private var isPresentingOpenPanel = false
     /// IDs of the main windows (Settings, onboarding/setup) currently on screen. KeyType normally runs
     /// as a dockless `.accessory` agent, but while one of these windows is open we promote it to a
     /// `.regular` (dock-visible) app so the user can ⌘-Tab back and forth like a normal app, then
@@ -165,8 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func syncContextCaptureWithPermission() {
-        // Don't resurrect the AX pipeline while the import panel is up — see `isPresentingImportPanel`.
-        guard !isPresentingImportPanel else { return }
+        // Don't resurrect the AX pipeline while an open panel is up — see `isPresentingOpenPanel`.
+        guard !isPresentingOpenPanel else { return }
         if permissions.accessibility.isGranted {
             contextCapture.start()
             completion.start()
@@ -261,9 +261,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.prompt = "Import"
         panel.message = "Choose a GGUF model file to import."
 
+        presentSafeOpenPanel(panel) { [weak self] response, url in
+            guard response == .OK, let url else { return }
+            self?.modelSetup.importModel(from: url)
+        }
+    }
+
+    /// Present an app-bundle picker for manual per-app Settings entries. This uses the same safe open
+    /// panel wrapper as model import because application panels take focus and can otherwise trigger
+    /// the AX deadlock documented above.
+    func presentAppAddPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsOtherFileTypes = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "Add"
+        panel.message = "Choose an app to show in per-app completions."
+
+        presentSafeOpenPanel(panel) { [weak self] response, url in
+            guard response == .OK, let url else { return }
+            guard let bundle = Bundle(url: url), let bundleIdentifier = bundle.bundleIdentifier else {
+                Self.presentAppAddFailureAlert()
+                return
+            }
+
+            self?.settings.addManualApp(
+                bundleIdentifier: bundleIdentifier,
+                name: Self.displayName(for: bundle, at: url)
+            )
+        }
+    }
+
+    private func presentSafeOpenPanel(
+        _ panel: NSOpenPanel,
+        onCompletion: @escaping (NSApplication.ModalResponse, URL?) -> Void
+    ) {
         // Stop everything that reads AX or taps the keyboard before the panel appears, and latch the
         // flag so the 1 Hz permission timer can't restart any of it while the panel is up.
-        isPresentingImportPanel = true
+        isPresentingOpenPanel = true
         contextCapture.stop()
         completion.stop()
         historyRecorder.stop()
@@ -275,11 +313,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with the paused AX pipeline this is what stops the hang.
         panel.begin { [weak self] response in
             guard let self else { return }
-            self.isPresentingImportPanel = false
+            let url = panel.url
+            self.isPresentingOpenPanel = false
             self.syncContextCaptureWithPermission()
-            guard response == .OK, let url = panel.url else { return }
-            self.modelSetup.importModel(from: url)
+            onCompletion(response, url)
         }
+    }
+
+    private static func displayName(for bundle: Bundle, at url: URL) -> String {
+        if let displayName = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+           !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return displayName
+        }
+        if let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
+           !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        return url.deletingPathExtension().lastPathComponent
+    }
+
+    private static func presentAppAddFailureAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Can’t Add This App"
+        alert.informativeText = "The selected item is not an app bundle with a bundle identifier."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     func requestOpenOnboarding() {

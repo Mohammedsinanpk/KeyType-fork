@@ -13,12 +13,13 @@ struct ShortcutsSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Acceptance keys") {
+            Section {
                 KeyRecorderView(
                     title: "Accept word",
                     subtitle: "Inserts the next word of the suggestion.",
                     shortcut: settings.acceptWordShortcut,
                     onChange: { settings.acceptWordShortcut = $0 },
+                    onClear: { settings.acceptWordShortcut = .unassigned },
                     onReset: settings.acceptWordShortcut != .defaultAcceptWord
                         ? { settings.acceptWordShortcut = .defaultAcceptWord } : nil
                 )
@@ -27,9 +28,14 @@ struct ShortcutsSettingsView: View {
                     subtitle: "Inserts the whole suggestion at once.",
                     shortcut: settings.acceptFullShortcut,
                     onChange: { settings.acceptFullShortcut = $0 },
+                    onClear: { settings.acceptFullShortcut = .unassigned },
                     onReset: settings.acceptFullShortcut != .defaultAcceptFull
                         ? { settings.acceptFullShortcut = .defaultAcceptFull } : nil
                 )
+            } header: {
+                Text("Acceptance keys")
+            } footer: {
+                Text("Clear a shortcut to leave that action unassigned.")
             }
         }
         .formStyle(.grouped)

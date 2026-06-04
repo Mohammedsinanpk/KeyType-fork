@@ -6,8 +6,8 @@
 //  accept keys only while a completion is visible and the app's CompletionPolicy allows Tab
 //  acceptance; otherwise every key passes straight through so native behaviour is untouched.
 //
-//  The accept-word and accept-full hotkeys are user-configurable (SettingsStore); they default to
-//  Tab and Shift+Tab respectively.
+//  The accept-word and accept-full hotkeys are user-configurable (SettingsStore), can be
+//  unassigned, and default to Tab and Shift+Tab respectively.
 //
 
 import AppKit
@@ -47,7 +47,7 @@ final class CompletionAcceptanceController {
             },
             userInfo: refcon
         ) else {
-            log.error("Failed to create Tab event tap (Accessibility not granted?)")
+            log.error("Failed to create acceptance event tap (Accessibility not granted?)")
             return
         }
 
@@ -58,7 +58,7 @@ final class CompletionAcceptanceController {
         eventTap = tap
         runLoopSource = source
         isRunning = true
-        log.debug("Tab acceptance tap installed")
+        log.debug("Completion acceptance tap installed")
     }
 
     func stop() {
