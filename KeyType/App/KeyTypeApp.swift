@@ -60,7 +60,8 @@ struct KeyTypeApp: App {
             .onAppear { appDelegate.mainWindowDidAppear(id: AppDelegate.settingsWindowID) }
             .onDisappear { appDelegate.mainWindowDidDisappear(id: AppDelegate.settingsWindowID) }
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 760, height: 600)
         .defaultPosition(.center)
         .commandsRemoved()
     }

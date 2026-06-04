@@ -42,7 +42,7 @@ struct SettingsView: View {
                 .frame(minWidth: 480, idealWidth: 520)
                 .navigationTitle(selection.title)
         }
-        .frame(width: 760, height: 600)
+        .frame(minWidth: 760, minHeight: 600)
     }
 
     @ViewBuilder
