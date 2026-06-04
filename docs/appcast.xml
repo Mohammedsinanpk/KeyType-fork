@@ -3,6 +3,15 @@
     <channel>
         <title>KeyType</title>
         <item>
+            <title>1.4</title>
+            <pubDate>Fri, 05 Jun 2026 05:01:08 +0800</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>New Features</h2><ul><li>Manual exclude app</li><li>Settings window resize</li><li>Latency snapshot comparison</li><li>1.11x speedup via zero-copy prefix checks</li><li>1.06x speedup via numeric mid-word suppression</li><li>1.18x speedup via adaptive beam width</li><li>1.06x speedup via guarded mid-word decode budget</li><li>2.39x speedup via default mid-line suppression</li><li>1.33x speedup via retokenized anchor history</li><li>1.27x speedup via overlapped debounce generation</li><li>1.18x speedup via tighter adaptive debounce</li><li>1.1x speedup via batched FIM rerank</li><li>Improved prompt logging</li><li>KeyTypeBench results</li><li>Eval harness</li></ul><h2>Bug Fixes</h2><ul><li>Slack completion insert</li></ul>]]></description>
+            <enclosure url="https://github.com/johnbean393/KeyType/releases/download/v1.4.0/KeyType.1.4.dmg" sparkle:edSignature="NLIdFDPTZJo/137gk09WVGY+ArIOjRdkf9U7r27vw/Sn6ddtCW6WX5iJdl7Cv4J7aFuvExx9ITG9hKDJvwDMBg==" length="14491324" type="application/octet-stream"/>
+        </item>
+        <item>
             <title>1.3</title>
             <pubDate>Wed, 03 Jun 2026 01:19:34 +0800</pubDate>
             <sparkle:version>5</sparkle:version>
