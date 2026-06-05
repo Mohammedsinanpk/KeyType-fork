@@ -3054,3 +3054,19 @@ text. Both are now closed:
 - Consequences: Every future release shows its features/fixes directly in the Sparkle prompt.
   Release notes are only as good as the `feat:`/`fix:` commit hygiene between tags. Past `<item>`
   entries remain note-less (the feed is append-only); they could be backfilled by hand if desired.
+
+## ADR-089 — Model regional English as OS-derived prompt context
+
+- Date: 2026-06-05
+- Status: accepted
+- Context: Issue #28 requested British English completions because the default local model tends to
+  produce US English. Maintaining separate regional prompt templates would duplicate prompt logic
+  and make future prompt tuning harder to reason about. A new user-facing spelling setting would add
+  configuration for behavior macOS already expresses through the user's preferred language.
+- Decision: derive regional English from `Locale.preferredLanguages` / the current locale and merge
+  only the resolved British/Commonwealth instruction into the existing `customInstructions` prompt
+  section. `PromptBuilder` remains singular. The resolver emits no extra instruction for `en-US`,
+  because the model already defaults to US English; it only adds the British instruction for clear
+  British/Commonwealth English locales such as `en-GB`, `en-AU`, and `en-NZ`.
+- Consequences: Regional spelling is a small OS-derived style signal layered beside app/domain
+  instructions, not a second prompt family or a user setting. Surrounding text still wins.

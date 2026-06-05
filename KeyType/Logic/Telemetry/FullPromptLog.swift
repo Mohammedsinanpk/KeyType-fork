@@ -156,6 +156,7 @@ struct FullPromptSideContextSnapshot: Encodable {
 
 struct FullPromptSettingsSnapshot: Encodable {
     var completionLength: String
+    var englishStyleInstruction: String?
     var fullPromptLoggingEnabled: Bool
     var perAppDisabledBundleIdentifiers: [String]
 }

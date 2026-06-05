@@ -48,6 +48,57 @@ enum CompletionLength: String, CaseIterable, Identifiable {
     }
 }
 
+/// OS-derived English spelling/phrasing preference. This stays as a small prompt-side style signal,
+/// not a user-facing setting or a regional prompt template.
+enum EnglishVariant {
+    case british
+
+    static func promptInstruction(
+        systemLocaleIdentifier: String = Locale.autoupdatingCurrent.identifier,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> String? {
+        switch systemVariant(
+            systemLocaleIdentifier: systemLocaleIdentifier,
+            preferredLanguages: preferredLanguages
+        ) {
+        case .british:
+            return "When writing English, prefer British English spelling and phrasing. Preserve the spelling convention already present in the surrounding text."
+        case nil:
+            return nil
+        }
+    }
+
+    private static func systemVariant(
+        systemLocaleIdentifier: String,
+        preferredLanguages: [String]
+    ) -> EnglishVariant? {
+        for identifier in preferredLanguages + [systemLocaleIdentifier] {
+            if let variant = variant(forLocaleIdentifier: identifier) {
+                return variant
+            }
+        }
+        return nil
+    }
+
+    private static func variant(forLocaleIdentifier identifier: String) -> EnglishVariant? {
+        let parts = identifier
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .map { $0.uppercased() }
+        guard parts.first == "EN" else { return nil }
+        guard parts.count >= 2 else { return nil }
+
+        switch parts[1] {
+        case "US":
+            return nil
+        case "GB", "UK", "AU", "NZ", "IE", "ZA":
+            return .british
+        default:
+            return nil
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class SettingsStore {
@@ -190,5 +241,20 @@ final class SettingsStore {
 
     func isAppEnabled(_ bundleIdentifier: String) -> Bool {
         !perAppDisabled.contains(bundleIdentifier)
+    }
+
+    func promptCustomInstructions(
+        appInstructions: [String],
+        systemLocaleIdentifier: String = Locale.autoupdatingCurrent.identifier,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> [String] {
+        var instructions = appInstructions
+        if let instruction = EnglishVariant.promptInstruction(
+            systemLocaleIdentifier: systemLocaleIdentifier,
+            preferredLanguages: preferredLanguages
+        ) {
+            instructions.append(instruction)
+        }
+        return instructions
     }
 }

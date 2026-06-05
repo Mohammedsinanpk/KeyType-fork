@@ -564,7 +564,7 @@ final class CompletionController {
         let (sideContext, sideContextReused) = promptSideContext(for: promptContext)
         let promptResult = KeyTypeModuleGraph.makePromptBuilder().buildPrompt(
             context: promptContext,
-            customInstructions: policy.customInstructions,
+            customInstructions: settings.promptCustomInstructions(appInstructions: policy.customInstructions),
             previousUserInputs: sideContext.previousUserInputs,
             pasteboardText: sideContext.pasteboardText,
             screenText: sideContext.screenText,
@@ -782,6 +782,7 @@ final class CompletionController {
             ),
             settings: FullPromptSettingsSnapshot(
                 completionLength: completionLength.rawValue,
+                englishStyleInstruction: EnglishVariant.promptInstruction(),
                 fullPromptLoggingEnabled: settings.fullPromptLoggingEnabled,
                 perAppDisabledBundleIdentifiers: Array(settings.perAppDisabled).sorted()
             ),

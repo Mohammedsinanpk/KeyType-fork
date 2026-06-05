@@ -73,6 +73,42 @@ struct KeyTypeTests {
         #expect(!reloaded.isAppEnabled("com.example.MenuBar"))
     }
 
+    @Test @MainActor func promptCustomInstructionsAppendOSDerivedBritishEnglishAfterAppInstructions() {
+        let (defaults, suiteName) = Self.temporaryDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = SettingsStore(defaults: defaults)
+
+        let instructions = store.promptCustomInstructions(
+            appInstructions: ["Continue the current message only."],
+            systemLocaleIdentifier: "en_US",
+            preferredLanguages: ["en-GB"]
+        )
+
+        #expect(instructions.count == 2)
+        #expect(instructions[0] == "Continue the current message only.")
+        #expect(instructions[1].contains("British English"))
+    }
+
+    @Test func englishVariantUsesOnlyNonDefaultRegionalEnglishLocales() {
+        let british = EnglishVariant.promptInstruction(
+            systemLocaleIdentifier: "en_US",
+            preferredLanguages: ["en-GB"]
+        )
+        let american = EnglishVariant.promptInstruction(
+            systemLocaleIdentifier: "en_US",
+            preferredLanguages: ["en-US"]
+        )
+        let nonEnglish = EnglishVariant.promptInstruction(
+            systemLocaleIdentifier: "fr_FR",
+            preferredLanguages: ["fr-FR"]
+        )
+
+        #expect(british?.contains("British English") == true)
+        #expect(american == nil)
+        #expect(nonEnglish == nil)
+    }
+
     @Test @MainActor func unassignedAcceptanceShortcutsPersist() {
         let (defaults, suiteName) = Self.temporaryDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
