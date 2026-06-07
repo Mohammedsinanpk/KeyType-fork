@@ -38,7 +38,9 @@ let package = Package(
             name: "KeyTypeBenchCLI",
             dependencies: [
                 "KeyTypeBench",
+                .product(name: "AppCompatibility", package: "AppCompatibility"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ConstrainedGeneration", package: "ConstrainedGeneration"),
                 .product(name: "LlamaModelRuntime", package: "ModelRuntime"),
                 .product(name: "ModelManagement", package: "ModelManagement"),
                 .product(name: "ModelRuntime", package: "ModelRuntime"),

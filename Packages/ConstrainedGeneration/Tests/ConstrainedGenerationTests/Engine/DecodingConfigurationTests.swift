@@ -8,7 +8,7 @@ final class DecodingConfigurationTests: XCTestCase {
         let config = DecodingConfiguration()
         XCTAssertEqual(config.fimMaxPrefixTokens, 256)
         XCTAssertEqual(config.fimMaxSuffixTokens, 64)
-        XCTAssertEqual(config.suffixRerankTokenCount, 3)
+        XCTAssertEqual(config.suffixRerankTokenCount, 0)
         XCTAssertEqual(config.suffixRerankWeight, 1.0)
     }
 

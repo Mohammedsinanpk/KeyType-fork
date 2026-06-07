@@ -72,7 +72,10 @@ final class CandidateFilterTests: XCTestCase {
     }
 
     func testMidLineCompletionDisabledWhenTextFollowsCursor() {
-        let filter = DefaultCandidateFilter()
+        let store = AppCompatibilityStore(overrides: [
+            TargetOverride(bundleIdentifier: Self.target.bundleIdentifier, midLineCompletionsDisabled: true)
+        ])
+        let filter = DefaultCandidateFilter(compatibilityStore: store)
         // Text after the cursor → mid-line → suppressed.
         XCTAssertEqual(
             filter.suppressionReason(for: candidate(" world"), request: request(afterCursor: "tail")),
@@ -80,6 +83,14 @@ final class CandidateFilterTests: XCTestCase {
         )
         // No text after the cursor → end-of-line → allowed.
         XCTAssertNil(filter.suppressionReason(for: candidate(" world"), request: request(afterCursor: "")))
+    }
+
+    func testMidLineCompletionAllowedByDefaultWhenConfident() {
+        let filter = DefaultCandidateFilter()
+        XCTAssertNil(filter.suppressionReason(
+            for: candidate("E.", tokenIDs: [1, 2]).withLogProbability(-0.7),
+            request: request(afterCursor: "Havens")
+        ))
     }
 
     func testTabShortcutsDisabled() {
@@ -328,6 +339,39 @@ final class CandidateFilterTests: XCTestCase {
         )
     }
 
+    func testShortExactMidLineSuffixCopyIsSuppressed() {
+        let filter = midLineEnabledFilter()
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate("E.", tokenIDs: [1, 2]).withLogProbability(-0.7),
+                request: request(afterCursor: "E. Havens")
+            ),
+            .duplicatesAfterCursor
+        )
+    }
+
+    func testLongMidLineCandidateIsSuppressedAsLowConfidence() {
+        let filter = midLineEnabledFilter()
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate(" National Museum of Racing and", tokenIDs: [1, 2, 3, 4, 5]).withLogProbability(-1.3),
+                request: request(afterCursor: "was founded in 1950.", maxCompletionTokens: 8)
+            ),
+            .lowConfidenceMidLine
+        )
+    }
+
+    func testLowProbabilityMidLineCandidateIsSuppressed() {
+        let filter = midLineEnabledFilter()
+        XCTAssertEqual(
+            filter.suppressionReason(
+                for: candidate("professor", tokenIDs: [1, 2]).withLogProbability(-2.54),
+                request: request(afterCursor: "was appointed in 1950.")
+            ),
+            .lowConfidenceMidLine
+        )
+    }
+
     func testTypoNetInertWithoutRecognizer() {
         let filter = DefaultCandidateFilter()
         XCTAssertNil(
@@ -465,5 +509,13 @@ final class CandidateFilterTests: XCTestCase {
                 )
             )
         )
+    }
+}
+
+private extension CompletionCandidate {
+    func withLogProbability(_ value: Double) -> CompletionCandidate {
+        var copy = self
+        copy.logProbability = value
+        return copy
     }
 }

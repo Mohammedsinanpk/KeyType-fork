@@ -60,7 +60,7 @@ public struct DecodingConfiguration: Equatable {
         enableFillInMiddle: Bool = false,
         fimMaxPrefixTokens: Int = 256,
         fimMaxSuffixTokens: Int = 64,
-        suffixRerankTokenCount: Int = 3,
+        suffixRerankTokenCount: Int = 0,
         suffixRerankWeight: Float = 1.0
     ) {
         self.topK = topK

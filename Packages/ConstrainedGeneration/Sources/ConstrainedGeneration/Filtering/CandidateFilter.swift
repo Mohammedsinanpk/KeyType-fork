@@ -114,16 +114,26 @@ public final class DefaultCandidateFilter: CandidateFiltering {
             completion: candidate.text,
             beforeCursor: request.context.beforeCursor,
             afterCursor: request.context.afterCursor
+        ) || SuffixOverlapGuard.duplicatesExactSuffixPrefix(
+            completion: candidate.text,
+            afterCursor: request.context.afterCursor
         ) {
             return .duplicatesAfterCursor
         }
 
-        // 8. Final typo net (the in-beam guard of ADR-015 is the primary defence).
+        // 8. Mid-line confidence net. Native FIM is useful only when it is both short and highly
+        //    likely; longer middle spans have been low-precision in edge data. Keep this deliberately
+        //    conservative so re-enabled mid-line favors suppression over wrong visible text.
+        if Self.hasLowConfidenceMidLineCandidate(candidate, request: request) {
+            return .lowConfidenceMidLine
+        }
+
+        // 9. Final typo net (the in-beam guard of ADR-015 is the primary defence).
         if looksLikeCurrentWordTypo(candidate: candidate, request: request) {
             return .currentWordLooksLikeTypo
         }
 
-        // 9. Dead-end mid-word net: the word is still *open* on a stem that can't begin any
+        // 10. Dead-end mid-word net: the word is still *open* on a stem that can't begin any
         //    dictionary word, so it could never resolve to a real word (e.g. a lone "x" after
         //    "th"). Catches the small-model failure of completing mid-word with a useless single
         //    letter. See ADR-052.
@@ -132,6 +142,20 @@ public final class DefaultCandidateFilter: CandidateFiltering {
         }
 
         return nil
+    }
+
+    private static let maxVisibleMidLineTokenCount = 2
+    private static let minimumMidLineMeanLogProbability = -0.5
+
+    static func hasLowConfidenceMidLineCandidate(
+        _ candidate: CompletionCandidate,
+        request: CompletionRequest
+    ) -> Bool {
+        guard !request.context.afterCursor.isEmpty else { return false }
+        guard !candidate.tokenIDs.isEmpty else { return true }
+        guard candidate.tokenIDs.count <= maxVisibleMidLineTokenCount else { return true }
+        let meanLogProbability = candidate.logProbability / Double(candidate.tokenIDs.count)
+        return meanLogProbability < minimumMidLineMeanLogProbability
     }
 
     // MARK: - Required prefix

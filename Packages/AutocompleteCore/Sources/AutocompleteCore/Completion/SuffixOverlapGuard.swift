@@ -51,6 +51,17 @@ public enum SuffixOverlapGuard {
         ) != nil
     }
 
+    /// `true` when the completion exactly re-emits the start of `afterCursor`, including very short
+    /// fills such as `"E."` before `"E. Havens"`. The broader overlap guard intentionally has a
+    /// minimum length to avoid suppressing coincidental shared runs; this helper is only for the
+    /// boundary-aligned exact-prefix case where accepting would visibly duplicate the suffix.
+    public static func duplicatesExactSuffixPrefix(completion: String, afterCursor: String) -> Bool {
+        let normalizedCompletion = normalizedAlphanumerics(completion)
+        let normalizedSuffix = normalizedAlphanumerics(afterCursor)
+        guard !normalizedCompletion.isEmpty, !normalizedSuffix.isEmpty else { return false }
+        return normalizedSuffix.hasPrefix(normalizedCompletion)
+    }
+
     /// Number of leading **characters of the original `completion`** to keep so that the kept text
     /// stops right where the completion begins reproducing `afterCursor`. Used to *salvage* a
     /// mid-line / FIM branch by truncating it at the suffix-overlap point instead of discarding it

@@ -142,10 +142,10 @@ final class QualitativeDemoTests: XCTestCase {
     }
 
     /// Production-like inputs the old demos never covered: trailing whitespace at the caret,
-    /// after-cursor default suppression, and suffix collisions. Mirrors what the live app captures,
-    /// and applies the same `CaretBoundary.reconcile` the app uses so the printed "field" column is
-    /// what the user would actually see inserted. FIM is configured, but AppCompatibility leaves
-    /// mid-line completion off by default. See ADR-082.
+    /// conservative after-cursor suppression, and suffix collisions. Mirrors what the live app
+    /// captures, and applies the same `CaretBoundary.reconcile` the app uses so the printed "field"
+    /// column is what the user would actually see inserted. FIM is configured, and AppCompatibility
+    /// allows mid-line completion by default; filters still suppress unsafe/low-confidence fills.
     func testPrintProductionLikeInputs() async throws {
         let (engine, _) = try loadEngine(
             configuration: DecodingConfiguration(maxCandidates: 5, enableFillInMiddle: true)

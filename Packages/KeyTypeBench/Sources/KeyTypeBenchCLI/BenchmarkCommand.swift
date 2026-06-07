@@ -1,4 +1,6 @@
+import AppCompatibility
 import ArgumentParser
+import ConstrainedGeneration
 import KeyTypeBench
 import Foundation
 import LlamaModelRuntime
@@ -56,6 +58,9 @@ struct Run: AsyncParsableCommand {
     @Option(name: .long, help: "Only run rows in this split.")
     var split: BenchmarkSplit?
 
+    @Option(name: .long, help: "Only run rows containing this tag. Can be passed more than once.")
+    var tags: [String] = []
+
     @Option(name: .long, help: "Default max completion tokens for rows without limits.")
     var maxCompletionTokens: Int = 4
 
@@ -64,6 +69,27 @@ struct Run: AsyncParsableCommand {
 
     @Option(name: .long, help: "Llama context length.")
     var contextLength: Int = 4096
+
+    @Flag(name: .long, help: "Opt benchmark targets with same-line after-cursor text into mid-line/FIM generation.")
+    var enableMidLine: Bool = false
+
+    @Option(name: .long, help: "Decoder beam width.")
+    var branchWidth: Int = DecodingConfiguration().branchWidth
+
+    @Option(name: .long, help: "Maximum returned candidates.")
+    var maxCandidates: Int = DecodingConfiguration().maxCandidates
+
+    @Option(name: .long, help: "FIM prefix token window nearest the caret; <= 0 disables the cap.")
+    var fimMaxPrefixTokens: Int = DecodingConfiguration().fimMaxPrefixTokens
+
+    @Option(name: .long, help: "FIM suffix token window nearest the caret; <= 0 disables the cap.")
+    var fimMaxSuffixTokens: Int = DecodingConfiguration().fimMaxSuffixTokens
+
+    @Option(name: .long, help: "Leading suffix tokens scored for FIM reranking; <= 0 disables rerank.")
+    var suffixRerankTokenCount: Int = DecodingConfiguration().suffixRerankTokenCount
+
+    @Option(name: .long, help: "Weight applied to FIM suffix-rerank score.")
+    var suffixRerankWeight: Float = DecodingConfiguration().suffixRerankWeight
 
     @Flag(name: .long, help: "Skip missing model/profile inputs instead of failing.")
     var skipMissing: Bool = false
@@ -93,8 +119,13 @@ struct Run: AsyncParsableCommand {
         if let split {
             cases = cases.filter { $0.split == split }
         }
+        for tag in tags {
+            cases = cases.filter { $0.tags.contains(tag) }
+        }
         guard !cases.isEmpty else {
-            throw ValidationError("Loaded dataset files, but no rows matched suite '\(suite.rawValue)'\(split.map { " and split '\($0.rawValue)'" } ?? "").")
+            let splitMessage = split.map { " and split '\($0.rawValue)'" } ?? ""
+            let tagMessage = tags.isEmpty ? "" : " and tags \(tags.map { "'\($0)'" }.joined(separator: ", "))"
+            throw ValidationError("Loaded dataset files, but no rows matched suite '\(suite.rawValue)'\(splitMessage)\(tagMessage).")
         }
 
         let models = try resolveModelURLs(cwd: cwd)
@@ -137,10 +168,22 @@ struct Run: AsyncParsableCommand {
                 family: family,
                 quantization: BenchmarkModelInfoFactory.quantization(from: modelURL.lastPathComponent)
             )
+            let compatibilityStore = makeCompatibilityStore(for: cases)
+            let decodingConfiguration = DecodingConfiguration(
+                branchWidth: branchWidth,
+                maxCandidates: maxCandidates,
+                enableFillInMiddle: true,
+                fimMaxPrefixTokens: fimMaxPrefixTokens,
+                fimMaxSuffixTokens: fimMaxSuffixTokens,
+                suffixRerankTokenCount: suffixRerankTokenCount,
+                suffixRerankWeight: suffixRerankWeight
+            )
             let evaluator = ProductionCompletionEvaluator(
                 runtime: runtime,
                 profile: acpf,
                 modelInfo: info,
+                compatibilityStore: compatibilityStore,
+                decodingConfiguration: decodingConfiguration,
                 defaultMaxCompletionTokens: maxCompletionTokens,
                 defaultMaxDisplayWidth: maxDisplayWidth
             )
@@ -210,6 +253,40 @@ struct Run: AsyncParsableCommand {
             .appendingPathComponent("Results", isDirectory: true)
             .appendingPathComponent("\(suite.rawValue)-\(stamp)", isDirectory: true)
     }
+
+    private func makeCompatibilityStore(for cases: [KeyTypeBenchCase]) -> AppCompatibilityStore {
+        guard enableMidLine else { return AppCompatibilityStore() }
+
+        var overrides = AppCompatibilityStore.defaultOverrides
+        var seen = Set<BenchmarkTargetKey>()
+        for benchmarkCase in cases {
+            let context = benchmarkCase.context
+            let sameLineSuffix = context.afterCursor.prefix { !$0.isNewline }
+            guard !context.afterCursor.isEmpty,
+                  sameLineSuffix.contains(where: { !$0.isWhitespace }),
+                  !context.traits.isTerminalLike
+            else { continue }
+
+            let key = BenchmarkTargetKey(
+                bundleIdentifier: context.target.bundleIdentifier,
+                domain: context.target.domain
+            )
+            guard seen.insert(key).inserted else { continue }
+            overrides.append(
+                TargetOverride(
+                    bundleIdentifier: key.bundleIdentifier,
+                    domain: key.domain,
+                    midLineCompletionsEnabled: true
+                )
+            )
+        }
+        return AppCompatibilityStore(overrides: overrides)
+    }
+}
+
+private struct BenchmarkTargetKey: Hashable {
+    var bundleIdentifier: String
+    var domain: String?
 }
 
 struct Compile: ParsableCommand {

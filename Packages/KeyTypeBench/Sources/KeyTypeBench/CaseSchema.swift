@@ -239,9 +239,12 @@ public struct BenchmarkTextFieldContext: Codable, Equatable {
     }
 
     public func coreContext() -> TextFieldContext {
-        TextFieldContext(
+        let currentLineSuffix = afterCursor.prefix { !$0.isNewline }
+        let isAtEndOfLine = !currentLineSuffix.contains { !$0.isWhitespace }
+        return TextFieldContext(
             beforeCursor: beforeCursor,
             afterCursor: afterCursor,
+            geometry: TextFieldGeometry(isAtEndOfLine: isAtEndOfLine),
             target: target.coreTarget(),
             placeholder: placeholder,
             labels: labels,

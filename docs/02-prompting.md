@@ -67,13 +67,12 @@ leading separator space so the field never gets a double space. The controller s
 
 ## Mid-line: suppressed by default; native fill-in-the-middle is opt-in (ADR-017/082)
 
-When the caret has non-empty `afterCursor`, KeyType suppresses by default. Current production and
-edge-benchmark data show mid-line/FIM suggestions are more often wrong than useful, and the path is a
-large latency-tail contributor. This follows the product rule: no suggestion is better than a wrong
-one.
+When the caret has non-empty `afterCursor`, KeyType uses native FIM by default but keeps the visible
+surface deliberately conservative. The model is allowed to infer a short middle; filters then
+suppress unsafe, suffix-copying, or low-confidence candidates. This follows the product rule: no
+suggestion is better than a wrong one.
 
-For targets that explicitly opt in through `AppCompatibility`, native FIM is still available. Base
-continuation tends to duplicate the suffix
+Targets can still opt out through `AppCompatibility`. Base continuation tends to duplicate the suffix
 (`"The capital of " | "is Paris."` → `" France is Paris."`). For models with trained FIM tokens
 (`<|fim_prefix|>` / `<|fim_suffix|>` / `<|fim_middle|>` each a single vocab token), the
 `ConstrainedGenerationEngine` instead assembles, from the raw context (not the scaffolded prompt):
@@ -89,13 +88,14 @@ when the markers don't resolve to single tokens on the loaded model. The FIM mar
 tokens (suppressed by the ACPF profile) so they never leak into output, and
 `CaretBoundary.reconcile` strips the leading newline FIM tends to prepend.
 
-Three always-on FIM-quality behaviors then refine mid-line output (ADR-057): the raw prefix/suffix
+Always-on FIM-quality behaviors then refine mid-line output (ADR-057/090): the raw prefix/suffix
 are **windowed toward the caret** (`fimMaxPrefixTokens`/`fimMaxSuffixTokens`) so a long body stays
 local and within budget; a branch that emits a real middle and then runs into the suffix is
 **truncated at the overlap** and salvaged rather than discarded (only a pure copy is dropped); and the
-surviving mid-line candidates are **reranked by suffix-likelihood** — the mean log-probability of the
-first few real `afterCursor` tokens given `prefix + middle` (a round-trip join score; reorder-only,
-never suppresses).
+surviving mid-line candidates pass a **visible confidence gate**: the accepted fill must be short and
+high-confidence. The older suffix-likelihood rerank remains available through
+`suffixRerankTokenCount`, but its default is `0` because the extra join probe dominated mid-line
+latency without improving edge-suite precision.
 
 ## Environment-context policy (ADR-017)
 

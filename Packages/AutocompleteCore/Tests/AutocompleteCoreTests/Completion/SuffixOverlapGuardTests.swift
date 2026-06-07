@@ -98,4 +98,18 @@ final class SuffixOverlapGuardTests: XCTestCase {
         // Two normalised characters — below the floor, so not judged.
         XCTAssertFalse(duplicates("hi", before: "say ", after: "hi there"))
     }
+
+    func testExactSuffixPrefixCatchesShortDuplicate() {
+        XCTAssertTrue(SuffixOverlapGuard.duplicatesExactSuffixPrefix(
+            completion: "E.",
+            afterCursor: "E. Havens"
+        ))
+    }
+
+    func testExactSuffixPrefixKeepsDifferentShortFill() {
+        XCTAssertFalse(SuffixOverlapGuard.duplicatesExactSuffixPrefix(
+            completion: "E.",
+            afterCursor: "Havens"
+        ))
+    }
 }

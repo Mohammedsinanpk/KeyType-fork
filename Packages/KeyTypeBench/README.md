@@ -32,6 +32,11 @@ swift run --package-path Packages/KeyTypeBench KeyTypeBench validate --suite smo
 # Run smoke against the default KeyType model/profile, if installed.
 swift run -c release --package-path Packages/KeyTypeBench KeyTypeBench run --suite smoke
 
+# Profile opt-in mid-line/FIM behavior on edge rows.
+swift run -c release --package-path Packages/KeyTypeBench KeyTypeBench run \
+  --suite edge \
+  --enable-mid-line
+
 # Run one or more explicit models.
 swift run -c release --package-path Packages/KeyTypeBench KeyTypeBench run \
   --suite core \

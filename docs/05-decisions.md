@@ -102,6 +102,14 @@ row here.**
 | 080 | Overlap generation with the debounce presentation gate | performance |
 | 081 | Reuse bounded anchor snapshots across retokenized typing | performance |
 | 082 | Suppress mid-line completions by default | generation/app-compatibility |
+| 083 | Cap healed mid-word token slack with boundary guards | generation |
+| 084 | Use a narrow default beam with a proper-noun exception | performance |
+| 085 | Suppress numeric mid-word stems before decode | performance |
+| 086 | Use zero-copy mmap bytes for required-prefix checks | performance |
+| 087 | Archive local telemetry snapshots for Statistics comparisons | performance/ui |
+| 088 | Embed release notes in the Sparkle appcast item | distribution |
+| 089 | Model regional English as OS-derived prompt context | prompting |
+| 090 | Re-enable mid-line FIM with conservative visible gating | generation/performance |
 
 ---
 
@@ -3070,3 +3078,30 @@ text. Both are now closed:
   British/Commonwealth English locales such as `en-GB`, `en-AU`, and `en-NZ`.
 - Consequences: Regional spelling is a small OS-derived style signal layered beside app/domain
   instructions, not a second prompt family or a user setting. Surrounding text still wins.
+
+## ADR-090 — Re-enable mid-line FIM with conservative visible gating
+
+- Date: 2026-06-07
+- Status: accepted
+- Context: ADR-082 disabled mid-line completions by default because enabled FIM was both slower and
+  lower precision than append completions. That fixed the release-1.4 latency tail by skipping
+  mid-line inference entirely, but it also removed a shipped capsule-bubble capability. Re-profiling
+  showed the expensive part was the suffix-likelihood rerank join probe: with mid-line enabled and
+  rerank on, the edge suite had FIM p95 generation around 257 ms and 59 wrong shown rows; with rerank
+  disabled, FIM p95 generation dropped to about 60 ms but the same wrong rows remained visible.
+- Decision: make `CompletionPolicy.allowsMidLineCompletion` default to `true` again, keep terminal
+  and explicit compatibility opt-outs, and change the default `suffixRerankTokenCount` to `0`.
+  Preserve quality with post-generation gates instead of default suppression: exact short copies of
+  the suffix head now return `duplicatesAfterCursor`, and visible mid-line candidates must be short
+  and high-confidence (`lowConfidenceMidLine` otherwise). This supersedes ADR-082's default-off
+  product choice while keeping its "suppress over wrong suggestion" constraint.
+- Consequences: Release `KeyTypeBench edge` with production defaults improved aggregate quality from
+  0.4287 to 0.4343, precision when shown from 0.5781 to 0.5814, and kept wrong-show rate unchanged
+  at 0.180. FIM rows now run inference instead of policy-skipping: FIM p50/p95 generation is
+  48.9/58.3 ms and p95 total is 59.2 ms, matching the append speed class (append insert rows were
+  60.0/103.6 ms p50/p95 generation in the same run; the focused release latency profile measured
+  short/medium/long append at 44.1/43.5/56.3 ms and mid-line FIM at 44.1 ms). FIM visible quality is
+  conservative: 1 correct insert, 0 wrong shown, and 74 acceptable suppressions on positive FIM rows.
+  Duplication-trap rows also showed 0 wrong suggestions, though many are scored as incorrect
+  suppressions because the benchmark fixtures expect only `duplicatesAfterCursor` while the new
+  product gate often suppresses them as `lowConfidenceMidLine`.

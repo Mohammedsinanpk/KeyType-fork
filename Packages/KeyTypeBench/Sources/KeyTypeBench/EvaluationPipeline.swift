@@ -54,6 +54,9 @@ public struct BenchmarkRowResult: Codable, Equatable {
     public var promptTokenCount: Int
     public var candidateCount: Int
     public var topCandidateText: String?
+    public var topCandidateLogProbability: Double?
+    public var topCandidateTokenCount: Int?
+    public var topCandidateMeanLogProbability: Double?
     public var topKCandidateTexts: [String]
     public var shownText: String?
     public var suppressionReason: String?
@@ -76,6 +79,9 @@ public struct BenchmarkRowResult: Codable, Equatable {
         promptTokenCount: Int,
         candidateCount: Int,
         topCandidateText: String?,
+        topCandidateLogProbability: Double? = nil,
+        topCandidateTokenCount: Int? = nil,
+        topCandidateMeanLogProbability: Double? = nil,
         topKCandidateTexts: [String],
         shownText: String?,
         suppressionReason: String?,
@@ -101,6 +107,9 @@ public struct BenchmarkRowResult: Codable, Equatable {
         self.promptTokenCount = promptTokenCount
         self.candidateCount = candidateCount
         self.topCandidateText = topCandidateText
+        self.topCandidateLogProbability = topCandidateLogProbability
+        self.topCandidateTokenCount = topCandidateTokenCount
+        self.topCandidateMeanLogProbability = topCandidateMeanLogProbability
         self.topKCandidateTexts = topKCandidateTexts
         self.shownText = shownText
         self.suppressionReason = suppressionReason
@@ -275,6 +284,11 @@ public final class ProductionCompletionEvaluator {
             promptTokenCount: promptResult.estimatedTokenCount,
             candidateCount: candidates.count,
             topCandidateText: top?.text,
+            topCandidateLogProbability: top?.logProbability,
+            topCandidateTokenCount: top?.tokenIDs.count,
+            topCandidateMeanLogProbability: top.map { candidate in
+                candidate.tokenIDs.isEmpty ? candidate.logProbability : candidate.logProbability / Double(candidate.tokenIDs.count)
+            },
             topKCandidateTexts: topK,
             shownText: visible.shownText,
             suppressionReason: visible.suppressionReason,

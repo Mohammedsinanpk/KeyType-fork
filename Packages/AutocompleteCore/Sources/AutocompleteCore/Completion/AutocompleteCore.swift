@@ -199,6 +199,9 @@ public enum SuppressionReason: Equatable {
     /// A mid-line / fill-in-the-middle completion that merely reproduces text already present after
     /// the caret — accepting it would duplicate the existing suffix. See `SuffixOverlapGuard`.
     case duplicatesAfterCursor
+    /// A mid-line / fill-in-the-middle completion that is too long or too low-probability to show
+    /// without risking a wrong suggestion.
+    case lowConfidenceMidLine
     case noCandidate
 }
 

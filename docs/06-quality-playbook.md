@@ -47,7 +47,7 @@ reads `SUPPRESS(x)`, find `x` here and check whether the gate is firing correctl
 | --- | --- |
 | `secureFieldExcluded` | Password/secure field — never complete. `AppCompatibility` `secureFieldExclusion`. |
 | `completionsDisabled` | App/domain disabled via `TargetOverride.completionsDisabled`. |
-| `midLineCompletionDisabled` | Mid-line gated off by default or for this target (`midLineCompletionsDisabled`). |
+| `midLineCompletionDisabled` | Mid-line gated off for this target (`midLineCompletionsDisabled`) or by an explicit compatibility override. |
 | `tabShortcutsDisabled` | Tab acceptance disabled for this target. |
 | `invalidUTF8` | Candidate bytes don't decode — dropped in the engine / filter. |
 | `requiredPrefixNotSatisfied` | Doesn't extend the current word's required prefix (ADR-025). |
@@ -58,6 +58,7 @@ reads `SUPPRESS(x)`, find `x` here and check whether the gate is firing correctl
 | `currentWordLooksLikeTypo` | In-beam typo guard closed the word into a misspelling (ADR-015/026). |
 | `currentWordHasNoValidCompletion` | The word is left *open* on a stem that can't begin any dictionary word (ADR-056). |
 | `duplicatesAfterCursor` | Reproduces text already after the caret — `SuffixOverlapGuard`. The engine first tries to *truncate* a mid-line branch at the overlap and keep the real middle; this fires only when nothing safe remains (ADR-049/057). |
+| `lowConfidenceMidLine` | Mid-line/FIM candidate was not short and high-confidence enough to show. This is the conservative visible gate that lets FIM run while preserving "suppress over wrong suggestion" (ADR-090). |
 | `noCandidate` | Generation returned nothing admissible. |
 
 If a gate is firing when it shouldn't, fix the **policy or guard that set it**, not the call site —

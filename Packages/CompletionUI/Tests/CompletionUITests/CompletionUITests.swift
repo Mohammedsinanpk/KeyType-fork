@@ -475,9 +475,8 @@ final class CompletionUITests: XCTestCase {
     func testResolveFontFallsBackToCaretHeight() {
         let placement = OverlayPlacement(cursorRect: CGRect(x: 0, y: 0, width: 1, height: 20))
         let resolved = InlineGhostTextPresenter.resolveFont(nil, placement: placement)
-        // Estimated from caret height (20 * 0.83 ≈ 16.6), clamped into [8, 96].
-        XCTAssertGreaterThanOrEqual(resolved.pointSize, 8)
-        XCTAssertLessThanOrEqual(resolved.pointSize, 96)
+        // Estimated from caret height (20 * 0.83), then reduced by 15%, clamped into [8, 96].
+        XCTAssertEqual(resolved.pointSize, 20 * 0.83 * 0.85, accuracy: 0.1)
     }
 
     @MainActor

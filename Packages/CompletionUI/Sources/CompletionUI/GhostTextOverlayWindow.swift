@@ -416,6 +416,7 @@ private extension String {
 public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
     private let window: GhostTextOverlayWindow
     public private(set) var visibleCandidate: CompletionCandidate?
+    private nonisolated static let fallbackFontSizeScale: CGFloat = 0.85
 
     public nonisolated init(window: GhostTextOverlayWindow = GhostTextOverlayWindow()) {
         self.window = window
@@ -466,8 +467,9 @@ public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
         }
 
         // No field font: estimate the point size from the caret height (≈1.2× the point size for
-        // typical UI fonts), since we have no metrics to scale by.
+        // typical UI fonts), then keep it slightly conservative because web-app caret geometry
+        // tends to overstate the rendered text size when AX does not expose font attributes.
         let estimated = caretHeight > 0 ? caretHeight * 0.83 : NSFont.systemFontSize
-        return .systemFont(ofSize: max(8, min(96, estimated * factor)))
+        return .systemFont(ofSize: max(8, min(96, estimated * Self.fallbackFontSizeScale * factor)))
     }
 }

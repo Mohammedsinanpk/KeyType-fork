@@ -21,7 +21,7 @@ final class AppCompatibilityTests: XCTestCase {
 
         XCTAssertTrue(policy.isCompletionEnabled)
         XCTAssertTrue(policy.allowsTabAcceptance)
-        XCTAssertFalse(policy.allowsMidLineCompletion)
+        XCTAssertTrue(policy.allowsMidLineCompletion)
         XCTAssertTrue(policy.insertionRequiresPasteAndMatchStyle)
         XCTAssertTrue(policy.insertionRequiresBackspaceAfterPaste)
         XCTAssertEqual(policy.overlayPreference, .textMirror)
@@ -126,7 +126,7 @@ final class AppCompatibilityTests: XCTestCase {
 
         XCTAssertTrue(policy.isCompletionEnabled)
         XCTAssertTrue(policy.allowsTabAcceptance)
-        XCTAssertFalse(policy.allowsMidLineCompletion)
+        XCTAssertTrue(policy.allowsMidLineCompletion)
         XCTAssertFalse(policy.includesEnvironmentContext)
         XCTAssertEqual(policy.overlayPreference, .inline)
         XCTAssertEqual(policy.completionMode, .prose)
@@ -145,6 +145,18 @@ final class AppCompatibilityTests: XCTestCase {
         let policy = store.policy(for: context)
 
         XCTAssertTrue(policy.allowsMidLineCompletion)
+    }
+
+    func testOverrideCanExplicitlyDisableMidLineCompletion() {
+        let target = AppTarget(bundleIdentifier: "com.example.no-midline", appName: "NoMidline")
+        let context = TextFieldContext(beforeCursor: "before", afterCursor: "after", target: target)
+        let store = AppCompatibilityStore(overrides: [
+            TargetOverride(bundleIdentifier: target.bundleIdentifier, midLineCompletionsDisabled: true)
+        ])
+
+        let policy = store.policy(for: context)
+
+        XCTAssertFalse(policy.allowsMidLineCompletion)
     }
 
     func testSlackNativeUsesTextMirrorWithVerticalAlignmentFix() {
