@@ -132,7 +132,8 @@ public struct FocusedFieldReader {
             target: target,
             beforeCursor: split.beforeCursor,
             fieldRect: fieldRect,
-            current: CapturedCaretGeometry(caretGeometry)
+            current: CapturedCaretGeometry(caretGeometry),
+            repairLineMismatchedCaret: traits.isWebField
         )
 
         let language = LanguageDetector.detectLanguage(in: split.beforeCursor)
@@ -342,7 +343,8 @@ public struct FocusedFieldReader {
         target: AppTarget,
         beforeCursor: String,
         fieldRect: CGRect?,
-        current: CapturedCaretGeometry
+        current: CapturedCaretGeometry,
+        repairLineMismatchedCaret: Bool
     ) -> CapturedCaretGeometry {
         var resolved = current
         for fallback in appCaretGeometryFallbacks {
@@ -359,14 +361,16 @@ public struct FocusedFieldReader {
         return Self.repairedCaretGeometry(
             beforeCursor: beforeCursor,
             fieldRect: fieldRect,
-            current: resolved
+            current: resolved,
+            repairLineMismatchedCaret: repairLineMismatchedCaret
         )
     }
 
     nonisolated static func repairedCaretGeometry(
         beforeCursor: String,
         fieldRect: CGRect?,
-        current: CapturedCaretGeometry
+        current: CapturedCaretGeometry,
+        repairLineMismatchedCaret: Bool = false
     ) -> CapturedCaretGeometry {
         guard let fieldRect,
               !fieldRect.isEmpty,
@@ -392,7 +396,8 @@ public struct FocusedFieldReader {
         let estimatedRect = AXCaretGeometryResolver.conservativeEstimatedCaretRect(
             in: fieldRect,
             text: beforeCursor,
-            selection: selection
+            selection: selection,
+            blankLineHeightBias: repairLineMismatchedCaret ? 1 : 0
         )
 
         let looksLikeContainer = AXCaretGeometryResolver.rectLooksLikeTextContainer(
@@ -405,8 +410,17 @@ public struct FocusedFieldReader {
             && estimatedAwayFromTrailingEdge
         let verticalTolerance = max(10, estimatedRect.height * 0.75)
         let verticallyCompatible = abs(rect.midY - estimatedRect.midY) <= verticalTolerance
+        let caretSized = rect.width <= max(8, estimatedRect.width * 4)
+            && rect.height <= max(32, estimatedRect.height * 1.8)
+        let horizontallyNearField = rect.maxX >= fieldRect.minX - 8
+            && rect.minX <= fieldRect.maxX + 8
+        let lineMismatchedCaret = repairLineMismatchedCaret
+            && current.quality != .estimated
+            && caretSized
+            && horizontallyNearField
+            && !verticallyCompatible
 
-        guard looksLikeContainer || (stuckAtTrailingEdge && verticallyCompatible) else {
+        guard looksLikeContainer || (stuckAtTrailingEdge && verticallyCompatible) || lineMismatchedCaret else {
             return current
         }
 

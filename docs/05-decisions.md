@@ -3175,3 +3175,64 @@ text. Both are now closed:
   The fix favors a conservative estimate over a visibly wrong exact-looking AX result, matching the
   product rule that suppression or approximation is preferable to misplaced suggestions. More
   expensive screenshot/OCR calibration can still refine style and vertical alignment independently.
+
+## ADR-094 — Use near-neutral width bias for generic soft-wrap repair
+
+- Date: 2026-06-08
+- Status: accepted
+- Context: The wrapped-caret repair initially reused the historical generic soft-wrap estimator with
+  a 1.1 width bias. In ChatGPT-style composers this overestimated the first visual line enough to
+  wrap before `AX`, so the repaired caret for `coordinates ` inherited the width of `AX provided`
+  and landed too far to the right on the continuation line.
+- Decision: Change the generic `AXCaretGeometryResolver` soft-wrap default to a near-neutral `0.98`
+  width bias while leaving app-specific fallbacks, such as Discord's explicit 1.1 bias, unchanged.
+  Add a regression covering the observed `AX provided coordinates ` field geometry so the repaired
+  caret starts near the continuation-line origin.
+- Consequences: Generic repaired caret placement now favors matching the target editor's actual
+  wrap point over intentionally overestimating text width. If a particular app needs the old bias,
+  it should own that in an `AppCaretGeometryFallback` instead of changing the global repair path.
+
+## ADR-095 — Split soft-wrap width bias into multiplier and point offset
+
+- Date: 2026-06-08
+- Status: accepted
+- Context: The soft-wrap caret estimator only exposed a multiplier-style width bias. That is useful
+  when measured text is proportionally too narrow or wide, but it is a poor fit for small fixed
+  placement errors where every measured token needs the same point adjustment.
+- Decision: Keep the existing `widthBias` multiplier and add a default-zero `widthPointOffsetBias`
+  to the generic estimator and app-specific fallback path. Apply the fixed point offset after the
+  multiplier and per-character ceiling, then clamp the token width at zero.
+- Consequences: App fallbacks and calibration code can now tune soft-wrap estimates with two
+  independent knobs: proportional width scaling and a fixed point adjustment. Existing callers keep
+  current behavior because the new offset defaults to zero.
+
+## ADR-096 — Repair web caret rects that land on the wrong visual line
+
+- Date: 2026-06-08
+- Status: accepted
+- Context: Web-backed editors can return an exact-looking caret rectangle whose width and x position
+  look plausible, but whose y position belongs to a neighboring visual line. The existing repair only
+  caught field-sized rects and trailing-edge wrap failures, so these `2x18` rects passed through and
+  placed ghost text above or below the true typing line after the first line.
+- Decision: Keep the existing generic repair, and add a web-field-gated line-mismatch repair. When
+  the text/field estimate says the caret is on a continuation line, a caret-sized AX rect is
+  replaced with the conservative field estimate if its vertical midpoint differs from the estimated
+  visual line by more than the normal tolerance.
+- Consequences: Web renderers no longer get a free pass just because their bad rect is caret-sized.
+  Native multiline fields keep the previous behavior unless they hit the older container/trailing
+  edge repair paths, avoiding regressions from native editors with different paragraph spacing.
+
+## ADR-097 — Account for blank-line paragraph spacing in web caret repair
+
+- Date: 2026-06-08
+- Status: accepted
+- Context: The line-mismatch repair fixed wrong-line AX rects, but the conservative vertical estimate
+  still treated blank logical lines as ordinary line breaks. In web composers, blank lines between
+  passages often carry paragraph spacing in addition to text line height, so repaired suggestions
+  appeared one visual line too high per blank line.
+- Decision: Add a default-zero `blankLineHeightBias` to the conservative caret rect estimator and
+  enable a one-line bias only from the web-field line-mismatch repair path. The bias adds one extra
+  line-height for each blank logical line before the caret.
+- Consequences: Web paragraph breaks now move repaired ghost-text placement down with the rendered
+  passage spacing, including compounding across multiple blank lines. Native/default estimates keep
+  their previous behavior.

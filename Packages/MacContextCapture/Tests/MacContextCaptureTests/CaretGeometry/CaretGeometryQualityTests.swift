@@ -107,6 +107,59 @@ final class CaretGeometryQualityTests: XCTestCase {
         XCTAssertEqual(layout.xOffset, characterWidth * 4, accuracy: 0.5)
     }
 
+    func testEstimatedCaretLayoutSupportsPointOffsetBias() {
+        let font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let text = "aaaa"
+        let selection = NSRange(location: (text as NSString).length, length: 0)
+        let baseline = AXCaretGeometryResolver.estimatedSoftWrappedCaretLayout(
+            in: text,
+            selection: selection,
+            availableWidth: 1_000,
+            font: font,
+            widthBias: 1,
+            widthPointOffsetBias: 0
+        )
+
+        let shifted = AXCaretGeometryResolver.estimatedSoftWrappedCaretLayout(
+            in: text,
+            selection: selection,
+            availableWidth: 1_000,
+            font: font,
+            widthBias: 1,
+            widthPointOffsetBias: 7
+        )
+
+        XCTAssertEqual(shifted.lineIndex, baseline.lineIndex)
+        XCTAssertEqual(shifted.xOffset, baseline.xOffset + 7, accuracy: 0.5)
+    }
+
+    func testEstimatedCaretRectSupportsBlankLineHeightBias() {
+        let field = CGRect(x: 520, y: 142, width: 712, height: 160)
+        let beforeCursor = """
+        First passage.
+
+        Second passage.
+
+        Third passage
+        """
+        let selection = NSRange(location: (beforeCursor as NSString).length, length: 0)
+        let baseline = AXCaretGeometryResolver.conservativeEstimatedCaretRect(
+            in: field,
+            text: beforeCursor,
+            selection: selection,
+            blankLineHeightBias: 0
+        )
+
+        let shifted = AXCaretGeometryResolver.conservativeEstimatedCaretRect(
+            in: field,
+            text: beforeCursor,
+            selection: selection,
+            blankLineHeightBias: 1
+        )
+
+        XCTAssertEqual(baseline.minY - shifted.minY, baseline.height * 2, accuracy: 0.001)
+    }
+
     func testWrappedLineTrailingEdgeCaretIsRepairedFromFieldEstimate() {
         let field = CGRect(x: 520, y: 142, width: 712, height: 44)
         let beforeCursor = """
@@ -135,6 +188,108 @@ final class CaretGeometryQualityTests: XCTestCase {
         XCTAssertEqual(repaired.source, "AXFrameEstimateAfterInvalidCaret(AXBoundsForRange)")
         XCTAssertEqual(repaired.rect?.minX ?? 0, expected.minX, accuracy: 0.001)
         XCTAssertLessThan(repaired.rect?.minX ?? .greatestFiniteMagnitude, badCaret.minX - 80)
+    }
+
+    func testRepairedChatGPTSoftWrapStartsCurrentWordNearLineOrigin() {
+        let field = CGRect(x: 520, y: 142, width: 712, height: 44)
+        let beforeCursor = "This is a test of the new KeyType improvements, where screenshots are now used to check if AX provided coordinates "
+        let badCaret = CGRect(x: 1226, y: 148, width: 2, height: 36)
+        let current = CapturedCaretGeometry(
+            rect: badCaret,
+            source: "AXBoundsForRange",
+            quality: CaretGeometryQuality.exact
+        )
+
+        let repaired = FocusedFieldReader.repairedCaretGeometry(
+            beforeCursor: beforeCursor,
+            fieldRect: field,
+            current: current
+        )
+
+        XCTAssertEqual(repaired.quality, .estimated)
+        XCTAssertGreaterThan(repaired.rect?.minX ?? 0, field.minX + 60)
+        XCTAssertLessThan(repaired.rect?.minX ?? .greatestFiniteMagnitude, field.minX + 120)
+    }
+
+    func testWebLineMismatchedCaretIsRepairedFromFieldEstimate() {
+        let field = CGRect(x: 520, y: 142, width: 712, height: 160)
+        let beforeCursor = """
+        Per-app overrides are currently quite difficult to adjust in development.
+
+        Since building KeyType from Xcode doesn't get the Accessibility permis
+        """
+        let lineMismatchedCaret = CGRect(x: 992, y: 263, width: 2, height: 18)
+        let current = CapturedCaretGeometry(
+            rect: lineMismatchedCaret,
+            source: "AXBoundsForRange",
+            quality: CaretGeometryQuality.exact
+        )
+        let selection = NSRange(location: (beforeCursor as NSString).length, length: 0)
+        let expected = AXCaretGeometryResolver.conservativeEstimatedCaretRect(
+            in: field,
+            text: beforeCursor,
+            selection: selection,
+            blankLineHeightBias: 1
+        )
+
+        let repaired = FocusedFieldReader.repairedCaretGeometry(
+            beforeCursor: beforeCursor,
+            fieldRect: field,
+            current: current,
+            repairLineMismatchedCaret: true
+        )
+
+        XCTAssertEqual(repaired.quality, .estimated)
+        XCTAssertEqual(repaired.source, "AXFrameEstimateAfterInvalidCaret(AXBoundsForRange)")
+        XCTAssertEqual(repaired.rect?.minY ?? 0, expected.minY, accuracy: 0.001)
+        XCTAssertGreaterThan(abs(lineMismatchedCaret.midY - expected.midY), expected.height * 0.75)
+    }
+
+    func testLineMismatchedCaretIsNotRepairedByDefault() {
+        let field = CGRect(x: 520, y: 142, width: 712, height: 160)
+        let beforeCursor = """
+        Per-app overrides are currently quite difficult to adjust in development.
+
+        Since building KeyType from Xcode doesn't get the Accessibility permis
+        """
+        let lineMismatchedCaret = CGRect(x: 992, y: 263, width: 2, height: 18)
+        let current = CapturedCaretGeometry(
+            rect: lineMismatchedCaret,
+            source: "AXBoundsForRange",
+            quality: CaretGeometryQuality.exact
+        )
+
+        let repaired = FocusedFieldReader.repairedCaretGeometry(
+            beforeCursor: beforeCursor,
+            fieldRect: field,
+            current: current
+        )
+
+        XCTAssertEqual(repaired, current)
+    }
+
+    func testLineMismatchedEstimatedCaretIsNotRepairedAgain() {
+        let field = CGRect(x: 520, y: 142, width: 712, height: 160)
+        let beforeCursor = """
+        Per-app overrides are currently quite difficult to adjust in development.
+
+        Since building KeyType from Xcode doesn't get the Accessibility permis
+        """
+        let estimatedCaret = CGRect(x: 992, y: 263, width: 2, height: 18)
+        let current = CapturedCaretGeometry(
+            rect: estimatedCaret,
+            source: "discordSoftWrapEstimate",
+            quality: CaretGeometryQuality.estimated
+        )
+
+        let repaired = FocusedFieldReader.repairedCaretGeometry(
+            beforeCursor: beforeCursor,
+            fieldRect: field,
+            current: current,
+            repairLineMismatchedCaret: true
+        )
+
+        XCTAssertEqual(repaired, current)
     }
 
     func testSingleLineTallCaretIsNotRepairedWithoutWrapEvidence() {

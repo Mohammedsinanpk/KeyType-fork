@@ -369,17 +369,18 @@ public struct AXCaretGeometryResolver {
     nonisolated static func conservativeEstimatedCaretX(
         in cocoaRect: CGRect,
         text: String,
-        selection: NSRange
+        selection: NSRange,
+        widthBias: CGFloat = 0.95,
+        widthPointOffsetBias: CGFloat = 0
     ) -> CGFloat {
         let currentLinePrefix = Self.currentLinePrefix(in: text, selection: selection)
-        let line = currentLinePrefix as NSString
-
-        let estimatedWidthBias: CGFloat = 1.1
-        let measuredWidth = line.size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: 15)
-        ]).width * estimatedWidthBias
-        let perCharacterCeiling: CGFloat = 13.3 * estimatedWidthBias
-        let estimatedWidth = min(measuredWidth, CGFloat(line.length) * perCharacterCeiling)
+        let font = NSFont.systemFont(ofSize: 15)
+        let estimatedWidth = Self.estimatedTextWidth(
+            currentLinePrefix,
+            font: font,
+            widthBias: widthBias,
+            widthPointOffsetBias: widthPointOffsetBias
+        )
 
         return cocoaRect.minX + estimatedWidth
     }
@@ -387,25 +388,40 @@ public struct AXCaretGeometryResolver {
     nonisolated static func conservativeEstimatedCaretRect(
         in cocoaRect: CGRect,
         text: String,
-        selection: NSRange
+        selection: NSRange,
+        widthBias: CGFloat = 0.95,
+        widthPointOffsetBias: CGFloat = 0,
+        blankLineHeightBias: CGFloat = 0
     ) -> CGRect {
-        let lineHeight = min(max(NSFont.systemFont(ofSize: 15).boundingRectForFont.height, 18), 24)
+        let font = NSFont.systemFont(ofSize: 15)
+        let lineHeight = min(max(font.boundingRectForFont.height, 18), 24)
         let height = min(cocoaRect.height, lineHeight)
 
         guard cocoaRect.height > lineHeight * 2 else {
-            let x = min(Self.conservativeEstimatedCaretX(in: cocoaRect, text: text, selection: selection), cocoaRect.maxX)
+            let x = min(Self.conservativeEstimatedCaretX(
+                in: cocoaRect,
+                text: text,
+                selection: selection,
+                widthBias: widthBias,
+                widthPointOffsetBias: widthPointOffsetBias
+            ), cocoaRect.maxX)
             return CGRect(x: x, y: cocoaRect.minY, width: 2, height: height)
         }
 
         let wrapped = Self.estimatedSoftWrappedCaretLayout(
             in: text,
             selection: selection,
-            availableWidth: cocoaRect.width
+            availableWidth: cocoaRect.width,
+            widthBias: widthBias,
+            widthPointOffsetBias: widthPointOffsetBias
         )
         let x = min(cocoaRect.minX + wrapped.xOffset, cocoaRect.maxX)
         let lineIndex = CGFloat(wrapped.lineIndex)
+        let blankLineCount = CGFloat(Self.blankLogicalLineCountBeforeCaret(in: text, selection: selection))
         let topPadding: CGFloat = 2
-        let estimatedY = cocoaRect.maxY - topPadding - ((lineIndex + 1) * lineHeight)
+        let estimatedY = cocoaRect.maxY
+            - topPadding
+            - ((lineIndex + 1 + (blankLineCount * blankLineHeightBias)) * lineHeight)
         let clampedY = min(max(estimatedY, cocoaRect.minY), cocoaRect.maxY - height)
 
         return CGRect(x: x, y: clampedY, width: 2, height: height)
@@ -416,7 +432,8 @@ public struct AXCaretGeometryResolver {
         selection: NSRange,
         availableWidth: CGFloat,
         font: NSFont = NSFont.systemFont(ofSize: 15),
-        widthBias: CGFloat = 1.1
+        widthBias: CGFloat = 0.95,
+        widthPointOffsetBias: CGFloat = 0
     ) -> (lineIndex: Int, xOffset: CGFloat) {
         let nsText = text as NSString
         let safeLocation = min(max(selection.location, 0), nsText.length)
@@ -430,7 +447,8 @@ public struct AXCaretGeometryResolver {
                 for: line,
                 availableWidth: width,
                 font: font,
-                widthBias: widthBias
+                widthBias: widthBias,
+                widthPointOffsetBias: widthPointOffsetBias
             )
             if index == logicalLines.count - 1 {
                 return (
@@ -448,7 +466,8 @@ public struct AXCaretGeometryResolver {
         for line: String,
         availableWidth: CGFloat,
         font: NSFont,
-        widthBias: CGFloat
+        widthBias: CGFloat,
+        widthPointOffsetBias: CGFloat
     ) -> (lineIndex: Int, xOffset: CGFloat) {
         guard !line.isEmpty else {
             return (lineIndex: 0, xOffset: 0)
@@ -465,13 +484,23 @@ public struct AXCaretGeometryResolver {
             }
             guard !token.isEmpty else { continue }
 
-            var tokenWidth = estimatedTextWidth(token, font: font, widthBias: widthBias)
+            var tokenWidth = estimatedTextWidth(
+                token,
+                font: font,
+                widthBias: widthBias,
+                widthPointOffsetBias: widthPointOffsetBias
+            )
             if currentWidth > 0, currentWidth + tokenWidth > width {
                 lineIndex += 1
                 currentWidth = 0
                 token = token.trimmingCharacters(in: .whitespaces)
                 guard !token.isEmpty else { continue }
-                tokenWidth = estimatedTextWidth(token, font: font, widthBias: widthBias)
+                tokenWidth = estimatedTextWidth(
+                    token,
+                    font: font,
+                    widthBias: widthBias,
+                    widthPointOffsetBias: widthPointOffsetBias
+                )
             }
 
             if tokenWidth > width {
@@ -506,11 +535,16 @@ public struct AXCaretGeometryResolver {
     private nonisolated static func estimatedTextWidth(
         _ text: String,
         font: NSFont,
-        widthBias: CGFloat
+        widthBias: CGFloat,
+        widthPointOffsetBias: CGFloat
     ) -> CGFloat {
-        let measuredWidth = (text as NSString).size(withAttributes: [.font: font]).width * widthBias
+        let measuredWidth = (text as NSString).size(withAttributes: [.font: font]).width
         let perCharacterCeiling: CGFloat = 13.3 * widthBias
-        return min(measuredWidth, CGFloat((text as NSString).length) * perCharacterCeiling)
+        let multiplierBiasedWidth = min(
+            measuredWidth * widthBias,
+            CGFloat((text as NSString).length) * perCharacterCeiling
+        )
+        return max(0, multiplierBiasedWidth + widthPointOffsetBias)
     }
 
     private nonisolated static func currentLinePrefix(in text: String, selection: NSRange) -> String {
@@ -518,6 +552,17 @@ public struct AXCaretGeometryResolver {
         let safeLocation = min(selection.location, nsText.length)
         let prefix = nsText.substring(to: safeLocation)
         return prefix.components(separatedBy: .newlines).last ?? prefix
+    }
+
+    private nonisolated static func blankLogicalLineCountBeforeCaret(in text: String, selection: NSRange) -> Int {
+        let nsText = text as NSString
+        let safeLocation = min(max(selection.location, 0), nsText.length)
+        let prefix = nsText.substring(to: safeLocation)
+        let logicalLines = prefix.components(separatedBy: .newlines)
+        guard logicalLines.count > 1 else { return 0 }
+        return logicalLines.dropLast().filter { line in
+            line.trimmingCharacters(in: .whitespaces).isEmpty
+        }.count
     }
 
     private func rectIsNearAnchor(_ cocoaRect: CGRect, anchor: CGRect?) -> Bool {

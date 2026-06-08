@@ -12,6 +12,7 @@ enum DiscordComposeTextContext: AppCaretGeometryFallback {
         static let cursorHeight: CGFloat = 22
         static let topPadding: CGFloat = 17
         static let widthBias: CGFloat = 1.1
+        static let widthPointOffsetBias: CGFloat = 0
         static let minimumMultilineHeight: CGFloat = 40
         static let minimumUsableWidth: CGFloat = 80
     }
@@ -55,7 +56,8 @@ enum DiscordComposeTextContext: AppCaretGeometryFallback {
             selection: NSRange(location: (beforeCursor as NSString).length, length: 0),
             availableWidth: max(1, fieldRect.width),
             font: ComposerMetrics.font,
-            widthBias: ComposerMetrics.widthBias
+            widthBias: ComposerMetrics.widthBias,
+            widthPointOffsetBias: ComposerMetrics.widthPointOffsetBias
         )
 
         let x = min(max(fieldRect.minX + layout.xOffset, fieldRect.minX), fieldRect.maxX)
