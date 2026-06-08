@@ -110,6 +110,7 @@ row here.**
 | 088 | Embed release notes in the Sparkle appcast item | distribution |
 | 089 | Model regional English as OS-derived prompt context | prompting |
 | 090 | Re-enable mid-line FIM with conservative visible gating | generation/performance |
+| 091 | TextKit mirror overlay and richer AX text style | ui/context-capture |
 
 ---
 
@@ -3105,3 +3106,25 @@ text. Both are now closed:
   Duplication-trap rows also showed 0 wrong suggestions, though many are scored as incorrect
   suppressions because the benchmark fixtures expect only `duplicatesAfterCursor` while the new
   product gate often suppresses them as `lowConfidenceMidLine`.
+
+## ADR-091 — TextKit mirror overlay and richer AX text style
+
+- Date: 2026-06-08
+- Status: accepted
+- Context: The `.textMirror` preference previously changed placement and clipping behavior, but it
+  still drew inline ghost text through KeyType's simple width-based wrapper. Reconstructing
+  Cotypist's overlay showed that laying out hidden surrounding text in the same text system is the
+  more faithful way to handle soft wrapping and cursor-adjacent fragments. AX style probing also
+  carried only font and color, so a mirror renderer could not preserve paragraph, baseline, or line
+  metrics even when apps exposed them.
+- Decision: Add a TextKit-backed `TextMirrorCompletionView` behind existing `.textMirror` inline
+  placements. It lays out hidden current-paragraph text before and after the visible completion, then
+  aligns TextKit's caret at the insertion point to KeyType's captured caret rectangle. Keep capsule
+  bubbles and the regular inline renderer unchanged. Extend `FieldFontResolver` and
+  `OverlayTextStyle` to carry paragraph style, baseline offset, and a best-effort line-height value
+  into the overlay package.
+- Consequences: Text-mirror targets now use TextKit line fragments instead of hand-rolled wrapping
+  and skip the old approximate-caret overflow suppression when field geometry plus mirror context is
+  available. Eager redraw after accepting a word remains disabled for mirror mode because that path
+  needs a fresh AX snapshot with surrounding context. More precise screenshot calibration and richer
+  capsule-bubble styling remain future work.

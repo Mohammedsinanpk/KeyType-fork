@@ -9,12 +9,40 @@
 
 import AppKit
 import ApplicationServices
+import CompletionUI
 
-/// The font and foreground color read from the focused field, so the ghost-text overlay can match
-/// it. Either value may be `nil` when the app doesn't surface it through AX.
+/// The text attributes read from the focused field, so the ghost-text overlay can match it. Values
+/// may be `nil` when the app does not surface them through AX.
 struct ResolvedFieldStyle {
     var font: NSFont?
     var color: NSColor?
+    var paragraphStyle: NSParagraphStyle?
+    var baselineOffset: CGFloat
+    var lineHeight: CGFloat?
+
+    init(
+        font: NSFont? = nil,
+        color: NSColor? = nil,
+        paragraphStyle: NSParagraphStyle? = nil,
+        baselineOffset: CGFloat = 0,
+        lineHeight: CGFloat? = nil
+    ) {
+        self.font = font
+        self.color = color
+        self.paragraphStyle = paragraphStyle
+        self.baselineOffset = baselineOffset
+        self.lineHeight = lineHeight
+    }
+
+    var overlayTextStyle: OverlayTextStyle {
+        OverlayTextStyle(
+            font: font,
+            textColor: color,
+            paragraphStyle: paragraphStyle,
+            baselineOffset: baselineOffset,
+            lineHeight: lineHeight
+        )
+    }
 }
 
 @MainActor
@@ -27,12 +55,20 @@ enum FieldFontResolver {
     // AX foreground color: the attribute value is a `CGColor` (CFType), not an `NSColor`.
     private static let axForegroundColorAttribute = NSAttributedString.Key("AXForegroundColor")
 
-    /// The font and foreground color around the insertion point of the system-wide focused element.
+    /// The text attributes around the insertion point of the system-wide focused element.
     /// Reads `AXAttributedStringForRange` over a 1-character probe at the caret once, then extracts
-    /// both attributes. Missing attributes come back `nil`.
+    /// the attributes relevant to overlay alignment. Missing attributes come back nil/defaulted.
     static func currentStyle() -> ResolvedFieldStyle {
         guard let string = attributedProbe() else { return ResolvedFieldStyle() }
-        return ResolvedFieldStyle(font: font(from: string), color: color(from: string))
+        let resolvedFont = font(from: string)
+        let resolvedParagraphStyle = paragraphStyle(from: string)
+        return ResolvedFieldStyle(
+            font: resolvedFont,
+            color: color(from: string),
+            paragraphStyle: resolvedParagraphStyle,
+            baselineOffset: baselineOffset(from: string),
+            lineHeight: lineHeight(font: resolvedFont, paragraphStyle: resolvedParagraphStyle)
+        )
     }
 
     /// Back-compat convenience for callers that only need the font.
@@ -90,6 +126,40 @@ enum FieldFontResolver {
                 return NSColor(cgColor: cf as! CGColor)
             }
         }
+        return nil
+    }
+
+    private static func paragraphStyle(from string: NSAttributedString) -> NSParagraphStyle? {
+        string.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+    }
+
+    private static func baselineOffset(from string: NSAttributedString) -> CGFloat {
+        cgFloatAttribute(.baselineOffset, from: string) ?? 0
+    }
+
+    private static func lineHeight(font: NSFont?, paragraphStyle: NSParagraphStyle?) -> CGFloat? {
+        if let paragraphStyle {
+            if paragraphStyle.maximumLineHeight > 0 {
+                return paragraphStyle.maximumLineHeight
+            }
+            if paragraphStyle.minimumLineHeight > 0 {
+                return paragraphStyle.minimumLineHeight
+            }
+        }
+
+        guard let font else { return nil }
+        let natural = ceil(font.ascender - font.descender + font.leading)
+        return natural > 0 ? natural : nil
+    }
+
+    private static func cgFloatAttribute(
+        _ key: NSAttributedString.Key,
+        from string: NSAttributedString
+    ) -> CGFloat? {
+        let value = string.attribute(key, at: 0, effectiveRange: nil)
+        if let value = value as? CGFloat { return value }
+        if let value = value as? Double { return CGFloat(value) }
+        if let value = value as? NSNumber { return CGFloat(truncating: value) }
         return nil
     }
 

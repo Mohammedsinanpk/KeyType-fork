@@ -357,6 +357,79 @@ final class CompletionUITests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testTextMirrorSnippetUsesCurrentParagraphOnly() {
+        let snippet = TextMirrorSnippet.currentParagraph(
+            beforeCursor: "Earlier paragraph\nCurrent paragraph prefix",
+            afterCursor: " suffix\nNext paragraph"
+        )
+
+        XCTAssertEqual(snippet.before, "Current paragraph prefix")
+        XCTAssertEqual(snippet.after, " suffix")
+    }
+
+    @MainActor
+    func testTextMirrorCaretConvertsToFlippedFieldCoordinates() {
+        let field = CGRect(x: 100, y: 200, width: 300, height: 80)
+        let caret = CGRect(x: 160, y: 230, width: 2, height: 20)
+
+        let local = TextMirrorGeometry.localCaretRect(cursorRect: caret, fieldRect: field)
+
+        XCTAssertEqual(local.minX, 60)
+        XCTAssertEqual(local.minY, 30)
+        XCTAssertEqual(local.height, caret.height)
+    }
+
+    @MainActor
+    func testTextMirrorLayoutUsesFieldFrame() {
+        let font = NSFont.systemFont(ofSize: 15)
+        let field = CGRect(x: 80, y: 90, width: 420, height: 120)
+        let placement = OverlayPlacement(
+            cursorRect: CGRect(x: 250, y: 140, width: 2, height: 20),
+            fieldRect: field,
+            mode: .mirror
+        )
+        let layout = GhostTextOverlayWindow.textMirrorLayout(
+            for: OverlayTextStyle(font: font),
+            placement: placement
+        )
+
+        XCTAssertEqual(layout.frame, field)
+        XCTAssertGreaterThanOrEqual(layout.lineHeight, ceil(font.ascender - font.descender + font.leading))
+    }
+
+    @MainActor
+    func testTextMirrorViewAlignsTextKitCaretToCapturedCaret() {
+        let font = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
+        let field = CGRect(x: 100, y: 200, width: 260, height: 90)
+        let caret = CGRect(x: 174, y: 244, width: 2, height: 20)
+        let placement = OverlayPlacement(
+            cursorRect: caret,
+            fieldRect: field,
+            mode: .mirror
+        )
+        let view = TextMirrorCompletionNSView(
+            frame: CGRect(origin: .zero, size: field.size)
+        )
+        view.configure(
+            mirrorContext: TextMirrorOverlayContext(
+                beforeCursor: "hello ",
+                afterCursor: "world"
+            ),
+            completion: "there ",
+            style: OverlayTextStyle(font: font),
+            placement: placement
+        )
+
+        let origin = view.alignedDrawOrigin()
+        let mirrorCaret = view.caretRect(utf16Location: ("hello " as NSString).length)
+            .offsetBy(dx: origin.x, dy: origin.y)
+        let targetCaret = TextMirrorGeometry.localCaretRect(cursorRect: caret, fieldRect: field)
+
+        XCTAssertEqual(mirrorCaret.minX, targetCaret.minX, accuracy: 0.5)
+        XCTAssertEqual(mirrorCaret.minY, targetCaret.minY, accuracy: 0.5)
+    }
+
     // MARK: - Advance past an accepted word
 
     @MainActor

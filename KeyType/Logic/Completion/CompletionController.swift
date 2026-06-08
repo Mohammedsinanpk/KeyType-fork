@@ -1027,8 +1027,15 @@ final class CompletionController {
         }
         let candidate = CompletionCandidate(text: shown, mode: .prose)
         let effectiveStyle = Self.effectiveOverlayStyle(style, for: live)
-        let resolvedFont = InlineGhostTextPresenter.resolveFont(effectiveStyle.font, placement: placement)
-        if GhostTextOverlayWindow.shouldSuppressMirrorOverflow(text: shown, font: resolvedFont, placement: placement) {
+        let overlayStyle = effectiveStyle.overlayTextStyle
+        let mirrorContext = Self.textMirrorContext(for: live, placement: placement)
+        let canUseTextMirror = GhostTextOverlayWindow.canUseTextMirror(
+            placement: placement,
+            mirrorContext: mirrorContext
+        )
+        let resolvedFont = InlineGhostTextPresenter.resolveFont(overlayStyle.font, placement: placement)
+        if !canUseTextMirror,
+           GhostTextOverlayWindow.shouldSuppressMirrorOverflow(text: shown, font: resolvedFont, placement: placement) {
             predictionLog.append(
                 "PLACE suppress=mirrorOverflow cursor=\(PredictionLog.rect(placement.cursorRect)) field=\(placement.fieldRect.map(PredictionLog.rect) ?? "nil")"
             )
@@ -1040,7 +1047,12 @@ final class CompletionController {
         predictionLog.append(
             "PLACE mode=\(placement.mode) cursor=\(PredictionLog.rect(placement.cursorRect)) field=\(placement.fieldRect.map(PredictionLog.rect) ?? "nil")"
         )
-        presenter.show(candidate: candidate, placement: placement, font: effectiveStyle.font, textColor: effectiveStyle.color)
+        presenter.show(
+            candidate: candidate,
+            placement: placement,
+            style: overlayStyle,
+            mirrorContext: mirrorContext
+        )
         return true
     }
 
@@ -1173,6 +1185,21 @@ final class CompletionController {
     ) -> ResolvedFieldStyle {
         guard context.target.bundleIdentifier == "md.obsidian" else { return style }
         return ResolvedFieldStyle(font: nil, color: style.color)
+    }
+
+    nonisolated static func textMirrorContext(
+        for context: TextFieldContext,
+        placement: OverlayPlacement
+    ) -> TextMirrorOverlayContext? {
+        guard placement.mode == .mirror,
+              placement.presentation == .inlineGhost,
+              placement.fieldRect?.isEmpty == false else {
+            return nil
+        }
+        return TextMirrorOverlayContext(
+            beforeCursor: context.beforeCursor,
+            afterCursor: context.afterCursor
+        )
     }
 
     /// Whether the caret has shifted enough to warrant re-pinning the overlay. A small epsilon

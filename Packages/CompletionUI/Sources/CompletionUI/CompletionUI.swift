@@ -66,6 +66,44 @@ public struct OverlayPlacement: Equatable {
     }
 }
 
+/// Field text attributes used by overlay renderers. `font` may be nil before presenter resolution;
+/// `InlineGhostTextPresenter` derives a rendered font from the caret height when AX does not expose
+/// one or exposes a stale point size.
+public struct OverlayTextStyle {
+    public var font: NSFont?
+    public var textColor: NSColor?
+    public var paragraphStyle: NSParagraphStyle?
+    public var baselineOffset: CGFloat
+    public var lineHeight: CGFloat?
+
+    public init(
+        font: NSFont? = nil,
+        textColor: NSColor? = nil,
+        paragraphStyle: NSParagraphStyle? = nil,
+        baselineOffset: CGFloat = 0,
+        lineHeight: CGFloat? = nil
+    ) {
+        self.font = font
+        self.textColor = textColor
+        self.paragraphStyle = paragraphStyle
+        self.baselineOffset = baselineOffset
+        self.lineHeight = lineHeight
+    }
+}
+
+/// Source text surrounding the live caret for a TextKit mirror overlay. The mirror renderer lays out
+/// this hidden surrounding text together with the visible completion so wrapping is determined by the
+/// same text system primitives used by native text views.
+public struct TextMirrorOverlayContext: Equatable {
+    public var beforeCursor: String
+    public var afterCursor: String
+
+    public init(beforeCursor: String, afterCursor: String) {
+        self.beforeCursor = beforeCursor
+        self.afterCursor = afterCursor
+    }
+}
+
 public protocol CompletionOverlayPresenting {
     /// Show `candidate` at `placement`. `font` is the resolved font of the target text field (so
     /// ghost text matches the field); pass `nil` to let the presenter fall back to a system font

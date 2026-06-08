@@ -20,7 +20,7 @@ public final class GhostTextOverlayWindow {
 
     /// The parameters of the last `show`, kept so the overlay can be advanced past an accepted word
     /// without waiting for an AX snapshot (`advanceAfterAccepting`). Cleared on `hide`.
-    private var lastShow: (text: String, font: NSFont, placement: OverlayPlacement, textColor: NSColor?)?
+    private var lastShow: (text: String, style: OverlayTextStyle, placement: OverlayPlacement, mirrorContext: TextMirrorOverlayContext?)?
 
     /// Capsule geometry: padding inside the pill and the gap between the caret and the pill's top.
     static let capsuleHorizontalPadding = CapsuleCompletionView.defaultHorizontalPadding
@@ -36,15 +36,32 @@ public final class GhostTextOverlayWindow {
     /// leftward. The vertical extent matches the caret rect (so the text sits on the same line),
     /// shifted by `placement.verticalOffset`.
     public func show(text: String, font: NSFont, placement: OverlayPlacement, textColor: NSColor? = nil) {
+        show(
+            text: text,
+            style: OverlayTextStyle(font: font, textColor: textColor),
+            placement: placement
+        )
+    }
+
+    public func show(
+        text: String,
+        style: OverlayTextStyle,
+        placement: OverlayPlacement,
+        mirrorContext: TextMirrorOverlayContext? = nil
+    ) {
         guard !text.isEmpty else { hide(); return }
-        guard !Self.shouldSuppressMirrorOverflow(text: text, font: font, placement: placement) else {
+        let font = style.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let canUseTextMirror = Self.canUseTextMirror(placement: placement, mirrorContext: mirrorContext)
+        guard canUseTextMirror || !Self.shouldSuppressMirrorOverflow(text: text, font: font, placement: placement) else {
             hide()
             return
         }
 
-        let layout = Self.layout(for: text, font: font, placement: placement)
-        switch placement.presentation {
-        case .capsule:
+        let layout = canUseTextMirror
+            ? Self.textMirrorLayout(for: style, placement: placement)
+            : Self.layout(for: text, font: font, placement: placement)
+        switch (placement.presentation, canUseTextMirror) {
+        case (.capsule, _):
             // The capsule is a self-contained popover surface, so give it a drop shadow to lift it
             // off whatever text it sits below; ghost text deliberately has none (it should read as
             // part of the field).
@@ -57,14 +74,24 @@ public final class GhostTextOverlayWindow {
                     verticalPadding: Self.capsuleVerticalPadding
                 )
             )
-        case .inlineGhost:
+        case (.inlineGhost, true):
+            window.hasShadow = false
+            hosting.rootView = AnyView(
+                TextMirrorCompletionView(
+                    mirrorContext: mirrorContext!,
+                    completion: text,
+                    style: style,
+                    placement: placement
+                )
+            )
+        case (.inlineGhost, false):
             window.hasShadow = false
             hosting.rootView = AnyView(
                 GhostTextView(
                     lines: layout.lines,
                     font: font,
                     isRightToLeft: placement.isRightToLeft,
-                    textColor: textColor
+                    textColor: style.textColor
                 )
             )
         }
@@ -78,7 +105,7 @@ public final class GhostTextOverlayWindow {
             window.orderFrontRegardless()
         }
 
-        lastShow = (text, font, placement, textColor)
+        lastShow = (text, style, placement, mirrorContext)
     }
 
     /// Eagerly shrink the shown inline ghost text past an accepted word: shift it by the rendered
@@ -87,14 +114,17 @@ public final class GhostTextOverlayWindow {
     /// many native apps (it's near-instant in web fields), so without this the remainder visibly
     /// stalls after each Tab until the next snapshot lands. Because the prior overlay already drew
     /// `remainder` at exactly `head`'s width past the caret, shifting by that width lands it where it
-    /// already sat on screen; the later AX snapshot re-pins it precisely. No-op for the capsule
-    /// presentation (mid-line), which the AX path keeps repositioning. See ADR-054.
+    /// already sat on screen; the later AX snapshot re-pins it precisely. No-op for capsule and
+    /// text-mirror presentations, which need the AX path's full surrounding context. See ADR-054.
     public func advanceAfterAccepting(head: String, remainder: String) {
-        guard let last = lastShow, last.placement.presentation == .inlineGhost else { return }
+        guard let last = lastShow,
+              last.placement.presentation == .inlineGhost,
+              last.placement.mode != .mirror,
+              let font = last.style.font else { return }
         guard !remainder.isEmpty else { hide(); return }
-        let headWidth = Self.measuredWidth(head, font: last.font)
+        let headWidth = Self.measuredWidth(head, font: font)
         let placement = Self.advanced(last.placement, byAcceptedWidth: headWidth)
-        show(text: remainder, font: last.font, placement: placement, textColor: last.textColor)
+        show(text: remainder, style: last.style, placement: placement)
     }
 
     /// Shift an inline-ghost placement's caret rect by `width` along the writing direction (rightward
@@ -287,6 +317,28 @@ public final class GhostTextOverlayWindow {
         )
     }
 
+    public static func canUseTextMirror(
+        placement: OverlayPlacement,
+        mirrorContext: TextMirrorOverlayContext?
+    ) -> Bool {
+        placement.mode == .mirror
+            && placement.presentation == .inlineGhost
+            && mirrorContext != nil
+            && placement.fieldRect?.isEmpty == false
+    }
+
+    static func textMirrorLayout(for style: OverlayTextStyle, placement: OverlayPlacement) -> Layout {
+        let font = style.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let fontLineHeight = ceil(font.ascender - font.descender + font.leading)
+        let lineHeight = max(
+            style.lineHeight.map { CGFloat($0) } ?? 0,
+            fontLineHeight,
+            trustedCaretHeight(for: placement, fallbackLineHeight: fontLineHeight)
+        )
+        let frame = placement.fieldRect ?? placement.cursorRect
+        return Layout(frame: frame, lines: [], lineHeight: lineHeight)
+    }
+
     /// Layout for the mid-line capsule: a rounded pill placed directly *below* the caret. It is
     /// horizontally centered on the caret, then clamped inside the field so that a caret near the
     /// trailing edge pins the pill to the trailing edge (and likewise for the leading edge). When the
@@ -423,8 +475,26 @@ public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
     }
 
     public func show(candidate: CompletionCandidate, placement: OverlayPlacement, font: NSFont?, textColor: NSColor?) {
-        let resolved = Self.resolveFont(font, placement: placement)
-        window.show(text: candidate.text, font: resolved, placement: placement, textColor: textColor)
+        show(
+            candidate: candidate,
+            placement: placement,
+            style: OverlayTextStyle(font: font, textColor: textColor)
+        )
+    }
+
+    public func show(
+        candidate: CompletionCandidate,
+        placement: OverlayPlacement,
+        style: OverlayTextStyle?,
+        mirrorContext: TextMirrorOverlayContext? = nil
+    ) {
+        let resolved = Self.resolveStyle(style, placement: placement)
+        window.show(
+            text: candidate.text,
+            style: resolved,
+            placement: placement,
+            mirrorContext: mirrorContext
+        )
         visibleCandidate = candidate
     }
 
@@ -435,7 +505,7 @@ public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
 
     /// Advance the inline ghost text past an accepted `head`, redrawing `remainder` immediately
     /// rather than waiting for the next focused-field snapshot. See `GhostTextOverlayWindow`. Hides
-    /// the overlay when nothing remains. No-op for the capsule presentation.
+    /// the overlay when nothing remains. No-op for capsule and text-mirror presentations.
     public func advanceAfterAccepting(head: String, remainder: CompletionCandidate?) {
         window.advanceAfterAccepting(head: head, remainder: remainder?.text ?? "")
         visibleCandidate = remainder
@@ -471,5 +541,15 @@ public final class InlineGhostTextPresenter: CompletionOverlayPresenting {
         // tends to overstate the rendered text size when AX does not expose font attributes.
         let estimated = caretHeight > 0 ? caretHeight * 0.83 : NSFont.systemFontSize
         return .systemFont(ofSize: max(8, min(96, estimated * Self.fallbackFontSizeScale * factor)))
+    }
+
+    public static func resolveStyle(_ style: OverlayTextStyle?, placement: OverlayPlacement) -> OverlayTextStyle {
+        var resolved = style ?? OverlayTextStyle()
+        let font = resolveFont(resolved.font, placement: placement)
+        resolved.font = font
+        if resolved.lineHeight == nil {
+            resolved.lineHeight = font.ascender - font.descender + font.leading
+        }
+        return resolved
     }
 }
